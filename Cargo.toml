@@ -1,0 +1,29 @@
+[package]
+name = "decmpfs"
+version = "0.1.0"
+edition = "2021"
+description = "Apply OS-level transparent filesystem compression (APFS decmpfs / btrfs / NTFS) to a file in place."
+license = "MIT"
+repository = "https://github.com/jdalton/decmpfs"
+keywords = ["apfs", "btrfs", "compression", "decmpfs", "ntfs"]
+categories = ["filesystem"]
+
+# INTERIM: zstd is only used by the self-loading `decode` path lifted from napi-rs.
+# The next commit trims `resolve_self`/footer/cache/`decode`/`fnv1a64` (the napi
+# stub-loading cluster) — at which point this dependency is removed and the crate
+# is the lean FS-compression core (probe + compress_file + backends).
+[dependencies]
+zstd = { version = "0.13", default-features = false }
+
+# Backend syscalls, cfg-gated so non-target builds stay dep-free. Linux (btrfs
+# ioctls) and macOS (statfs/xattr/chflags + libcompression) both use libc.
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+] }

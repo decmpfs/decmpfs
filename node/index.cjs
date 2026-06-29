@@ -23,7 +23,7 @@ function abiSuffix() {
 }
 
 const triple = `${platform}-${arch}${abiSuffix()}`
-const platformPackage = `@jdalton/decmpfs-${triple}`
+const platformPackage = `@decmpfs/${triple}`
 
 function load() {
   try {

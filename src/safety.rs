@@ -4,15 +4,15 @@
 
 use std::path::Path;
 
-use crate::{backend, verify, Error, Outcome, SkipReason};
+use crate::{verify, Backend, Error, Outcome, SkipReason};
 
 /// Reached only when the backend reported `Supported`. Fail-soft: a permission,
 /// read-only, or busy failure is a `Skipped` Outcome, never a hard `Err`. And if a
 /// (broken) backend ever leaves the file no longer loadable, roll back to the
 /// pre-apply bytes so a corrupt addon is never stranded.
-pub(crate) fn apply_guarded(path: &Path) -> Result<Outcome, Error> {
+pub(crate) fn apply_guarded<B: Backend>(backend: &B, path: &Path) -> Result<Outcome, Error> {
   // INV-idempotent.
-  if backend::is_already_compressed(path)? {
+  if backend.is_already_compressed(path)? {
     return Ok(Outcome::AlreadyCompressed {
       before: verify::on_disk_bytes(path)?,
     });
@@ -34,7 +34,7 @@ pub(crate) fn apply_guarded(path: &Path) -> Result<Outcome, Error> {
 
   // INV-fail-soft: EACCES/EPERM/EROFS -> Skipped(PermissionDenied); EBUSY/ETXTBSY
   // -> Skipped(Busy). A genuine, unclassifiable I/O error still propagates.
-  if let Err(err) = backend::apply_inplace(path) {
+  if let Err(err) = backend.apply_inplace(path) {
     if let Error::Io { source, .. } = &err {
       if let Some(reason) = classify_skip(source) {
         return Ok(Outcome::Skipped { reason });
@@ -43,7 +43,7 @@ pub(crate) fn apply_guarded(path: &Path) -> Result<Outcome, Error> {
     return Err(err);
   }
 
-  verify_loadable_or_restore(path, before, magic_before, &snapshot)
+  verify_loadable_or_restore(backend, path, before, magic_before, &snapshot)
 }
 
 /// Post-apply gate for the in-place path: if the file no longer carries its
@@ -51,7 +51,8 @@ pub(crate) fn apply_guarded(path: &Path) -> Result<Outcome, Error> {
 /// `Skipped(NotLoadable)`; otherwise classify the win. Split out so the
 /// not-loadable rollback is unit-testable without a backend that corrupts a file
 /// (pass a `magic_before` the file no longer matches).
-fn verify_loadable_or_restore(
+fn verify_loadable_or_restore<B: Backend>(
+  backend: &B,
   path: &Path,
   before: u64,
   magic_before: [u8; 4],
@@ -71,7 +72,7 @@ fn verify_loadable_or_restore(
     true,
     before,
     after,
-    backend::compressed_on_disk(path)?,
+    backend.compressed_on_disk(path)?,
   ))
 }
 
@@ -116,8 +117,12 @@ fn classify_skip(err: &std::io::Error) -> Option<SkipReason> {
 /// propagates. After a successful apply the kernel read-back is verified
 /// byte-identical to `content` (the transparent-compression oracle), and the file
 /// is restored to a plain write of `content` if it somehow doesn't match.
-pub(crate) fn compress_bytes_guarded(path: &Path, content: &[u8]) -> Result<Outcome, Error> {
-  if let Err(err) = backend::apply_bytes(path, content, None) {
+pub(crate) fn compress_bytes_guarded<B: Backend>(
+  backend: &B,
+  path: &Path,
+  content: &[u8],
+) -> Result<Outcome, Error> {
+  if let Err(err) = backend.apply_bytes(path, content, None) {
     if let Error::Io { source, .. } = &err {
       if let Some(reason) = classify_skip(source) {
         return Ok(Outcome::Skipped { reason });
@@ -127,7 +132,7 @@ pub(crate) fn compress_bytes_guarded(path: &Path, content: &[u8]) -> Result<Outc
   }
 
   // Oracle: a normal read must hand back the exact bytes we asked to store.
-  verify_readback_or_restore(path, content)
+  verify_readback_or_restore(backend, path, content)
 }
 
 /// Post-apply oracle for the one-pass path: a normal read must hand back exactly
@@ -136,7 +141,11 @@ pub(crate) fn compress_bytes_guarded(path: &Path, content: &[u8]) -> Result<Outc
 /// install is never left with a corrupt file; otherwise classify the win. Split
 /// out so the mismatch-rollback is unit-testable without a backend that corrupts
 /// the read-back (point it at a file whose bytes differ from `content`).
-fn verify_readback_or_restore(path: &Path, content: &[u8]) -> Result<Outcome, Error> {
+fn verify_readback_or_restore<B: Backend>(
+  backend: &B,
+  path: &Path,
+  content: &[u8],
+) -> Result<Outcome, Error> {
   let after = verify::on_disk_bytes(path)?;
   let read_back = std::fs::read(path).map_err(|source| Error::Io {
     context: "read-back",
@@ -154,7 +163,7 @@ fn verify_readback_or_restore(path: &Path, content: &[u8]) -> Result<Outcome, Er
     true,
     before,
     after,
-    backend::compressed_on_disk(path)?,
+    backend.compressed_on_disk(path)?,
   ))
 }
 
@@ -178,9 +187,28 @@ fn restore(path: &Path, bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::{FakeBackend, Os, Support};
 
   fn err(kind: std::io::ErrorKind) -> std::io::Error {
     std::io::Error::from(kind)
+  }
+
+  #[test]
+  fn apply_guarded_propagates_an_unclassifiable_apply_error() {
+    // A fake backend reports a compressible FS but its in-place apply fails with an
+    // unclassifiable error (ENOENT) — apply_guarded propagates it rather than
+    // swallowing it. A real backend reaches this only on a true I/O fault.
+    let dir = std::env::temp_dir().join(format!("decmpfs-broken-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("f.bin");
+    std::fs::write(&path, b"\x7fELF readable original").unwrap();
+    let backend = FakeBackend {
+      detect: Support::Supported,
+      apply_errno: Some(2),
+    };
+    let out = apply_guarded(&backend, &path);
+    assert!(matches!(out, Err(Error::Io { .. })), "got {out:?}");
+    std::fs::remove_dir_all(&dir).ok();
   }
 
   #[test]
@@ -269,9 +297,30 @@ mod tests {
   #[cfg(target_os = "macos")]
   #[test]
   fn compress_bytes_guarded_propagates_an_unclassifiable_error() {
-    let out =
-      compress_bytes_guarded(std::path::Path::new("/no/such/decmpfs/dir/x.node"), b"data");
+    let out = compress_bytes_guarded(
+      &Os,
+      std::path::Path::new("/no/such/decmpfs/dir/x.node"),
+      b"data",
+    );
     assert!(matches!(out, Err(Error::Io { .. })));
+  }
+
+  #[test]
+  fn compress_bytes_guarded_success_classifies_via_the_backend_signal() {
+    // A faked successful apply over a file pre-seeded with `content`: the read-back
+    // oracle matches, so the backend's compressed_on_disk signal classifies the win.
+    let dir = std::env::temp_dir().join(format!("decmpfs-ok-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("f.bin");
+    let content = b"the stored content bytes, pre-seeded";
+    std::fs::write(&path, content).unwrap();
+    let backend = FakeBackend {
+      detect: Support::Supported,
+      apply_errno: None,
+    };
+    let out = compress_bytes_guarded(&backend, &path, content).unwrap();
+    assert!(matches!(out, Outcome::NoGain { .. }), "got {out:?}");
+    std::fs::remove_dir_all(&dir).ok();
   }
 
   #[test]
@@ -295,9 +344,14 @@ mod tests {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("f");
     std::fs::write(&path, b"\x7fELF garbage the backend supposedly produced").unwrap();
-    let out =
-      verify_loadable_or_restore(&path, 100, [0xde, 0xad, 0xbe, 0xef], b"the original bytes")
-        .unwrap();
+    let out = verify_loadable_or_restore(
+      &Os,
+      &path,
+      100,
+      [0xde, 0xad, 0xbe, 0xef],
+      b"the original bytes",
+    )
+    .unwrap();
     assert!(matches!(
       out,
       Outcome::Skipped {
@@ -322,7 +376,7 @@ mod tests {
     let path = dir.join("f");
     std::fs::write(&path, b"what the broken backend actually wrote").unwrap();
     let intended = b"the bytes the caller asked to store";
-    let out = verify_readback_or_restore(&path, intended).unwrap();
+    let out = verify_readback_or_restore(&Os, &path, intended).unwrap();
     assert!(matches!(
       out,
       Outcome::Skipped {

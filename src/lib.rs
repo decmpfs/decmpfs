@@ -132,15 +132,22 @@ pub fn probe(path: &Path) -> Result<Support, Error> {
 /// THE entry point: detect → gate → apply → verify → rollback-on-failure.
 /// Idempotent. Never panics. Never corrupts the file.
 pub fn compress_file(path: &Path) -> Result<Outcome, Error> {
+  compress_file_with(&Os, path)
+}
+
+/// `compress_file` over an injectable [`Backend`] — production always threads
+/// [`Os`]; tests drive the otherwise-dead `AlreadyCompressed`/`Unsupported` arms
+/// with a fake.
+fn compress_file_with<B: Backend>(backend: &B, path: &Path) -> Result<Outcome, Error> {
   if !path.exists() {
     return Err(Error::NotFound(path.to_path_buf()));
   }
-  match backend::detect(path)? {
+  match backend.detect(path)? {
     Support::Unsupported(reason) => Ok(Outcome::Unsupported { reason }),
     Support::AlreadyCompressed => Ok(Outcome::AlreadyCompressed {
       before: verify::on_disk_bytes(path)?,
     }),
-    Support::Supported => safety::apply_guarded(path),
+    Support::Supported => safety::apply_guarded(backend, path),
   }
 }
 
@@ -163,6 +170,18 @@ pub fn compress_file(path: &Path) -> Result<Outcome, Error> {
 /// the file is written plain and `Outcome::Skipped { reason: GateExcluded }` is
 /// returned. A caller that already gated can pass `&Gate::any()`.
 pub fn compress_bytes(path: &Path, content: &[u8], gate: &Gate) -> Result<Outcome, Error> {
+  compress_bytes_with(&Os, path, content, gate)
+}
+
+/// `compress_bytes` over an injectable [`Backend`] — production always threads
+/// [`Os`]; tests drive the plain-write fallback arms (a guarded skip/error, or a
+/// non-compressing FS) that a real APFS write never reaches.
+fn compress_bytes_with<B: Backend>(
+  backend: &B,
+  path: &Path,
+  content: &[u8],
+  gate: &Gate,
+) -> Result<Outcome, Error> {
   let name = path.to_string_lossy();
   let normalized = name.replace('\\', "/");
   if !gate.matches(&normalized, content.len() as u64) {
@@ -182,8 +201,8 @@ pub fn compress_bytes(path: &Path, content: &[u8], gate: &Gate) -> Result<Outcom
       None => path.to_path_buf(),
     }
   };
-  match backend::detect(&probe_target) {
-    Ok(Support::Supported) => match safety::compress_bytes_guarded(path, content) {
+  match backend.detect(&probe_target) {
+    Ok(Support::Supported) => match safety::compress_bytes_guarded(backend, path, content) {
       Ok(Outcome::Skipped { .. }) | Err(_) => {
         // A guarded skip/error already restored or never wrote — ensure the file
         // lands plain so the install is never missing the addon.
@@ -257,6 +276,97 @@ mod backend;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 #[path = "unsupported.rs"]
 mod backend;
+
+/// The OS compression backend as a trait, so the orchestration in `safety` can be
+/// driven by a fake in tests — a real filesystem never produces a non-loadable
+/// result or a mismatched read-back, so the rollback and plain-write fallback paths
+/// are otherwise unreachable. Production always threads [`Os`]; static dispatch
+/// monomorphizes it to the same code as a direct backend call (no vtable, no size
+/// cost in a release build).
+pub(crate) trait Backend {
+  fn detect(&self, path: &Path) -> Result<Support, Error>;
+  fn is_already_compressed(&self, path: &Path) -> Result<bool, Error>;
+  fn apply_inplace(&self, path: &Path) -> Result<(), Error>;
+  fn apply_bytes(
+    &self,
+    path: &Path,
+    content: &[u8],
+    mode: Option<std::fs::Permissions>,
+  ) -> Result<(), Error>;
+  fn compressed_on_disk(&self, path: &Path) -> Result<Option<bool>, Error>;
+}
+
+/// The real, cfg-selected OS backend.
+pub(crate) struct Os;
+
+impl Backend for Os {
+  fn detect(&self, path: &Path) -> Result<Support, Error> {
+    backend::detect(path)
+  }
+  fn is_already_compressed(&self, path: &Path) -> Result<bool, Error> {
+    backend::is_already_compressed(path)
+  }
+  fn apply_inplace(&self, path: &Path) -> Result<(), Error> {
+    backend::apply_inplace(path)
+  }
+  fn apply_bytes(
+    &self,
+    path: &Path,
+    content: &[u8],
+    mode: Option<std::fs::Permissions>,
+  ) -> Result<(), Error> {
+    backend::apply_bytes(path, content, mode)
+  }
+  fn compressed_on_disk(&self, path: &Path) -> Result<Option<bool>, Error> {
+    backend::compressed_on_disk(path)
+  }
+}
+
+/// A configurable in-memory backend for exercising the rollback and plain-write
+/// fallback paths that a real filesystem never reaches.
+#[cfg(test)]
+pub(crate) struct FakeBackend {
+  pub(crate) detect: Support,
+  /// `None` → apply succeeds; `Some(errno)` → apply fails with that OS error.
+  pub(crate) apply_errno: Option<i32>,
+}
+
+#[cfg(test)]
+impl FakeBackend {
+  fn apply_result(&self) -> Result<(), Error> {
+    match self.apply_errno {
+      None => Ok(()),
+      Some(errno) => Err(Error::Io {
+        context: "fake apply",
+        source: std::io::Error::from_raw_os_error(errno),
+      }),
+    }
+  }
+}
+
+#[cfg(test)]
+impl Backend for FakeBackend {
+  fn detect(&self, _path: &Path) -> Result<Support, Error> {
+    Ok(self.detect)
+  }
+  fn is_already_compressed(&self, _path: &Path) -> Result<bool, Error> {
+    Ok(false)
+  }
+  fn apply_inplace(&self, _path: &Path) -> Result<(), Error> {
+    self.apply_result()
+  }
+  fn apply_bytes(
+    &self,
+    _path: &Path,
+    _content: &[u8],
+    _mode: Option<std::fs::Permissions>,
+  ) -> Result<(), Error> {
+    self.apply_result()
+  }
+  fn compressed_on_disk(&self, _path: &Path) -> Result<Option<bool>, Error> {
+    Ok(Some(false))
+  }
+}
 
 
 #[cfg(test)]
@@ -511,6 +621,66 @@ mod tests {
     // Restore write perms so the tree can be cleaned up.
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).ok();
     assert!(out.is_err(), "a read-only dir admits no write, got {out:?}");
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  // The `Support::AlreadyCompressed`-from-detect arm: a real macOS detect never
+  // returns it (it reports already-compressed via the apply path), so a fake drives
+  // it. Needs a real file for the on-disk-bytes read.
+  #[test]
+  fn compress_file_reports_already_compressed_from_detect() {
+    let dir = scratch("already-detect");
+    let path = dir.join("f.node");
+    std::fs::write(&path, fake_addon()).unwrap();
+    let backend = FakeBackend {
+      detect: Support::AlreadyCompressed,
+      apply_errno: None,
+    };
+    assert!(matches!(
+      compress_file_with(&backend, &path),
+      Ok(Outcome::AlreadyCompressed { .. })
+    ));
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  // detect → Unsupported: the bytes still land via a plain write, Outcome::Unsupported.
+  #[test]
+  fn compress_bytes_falls_back_to_plain_on_an_unsupported_fs() {
+    let dir = scratch("unsup");
+    let path = dir.join("x.node");
+    let content = fake_addon();
+    let backend = FakeBackend {
+      detect: Support::Unsupported(UnsupportedReason::Filesystem),
+      apply_errno: None,
+    };
+    let out = compress_bytes_with(&backend, &path, &content, &Gate::any());
+    assert!(matches!(out, Ok(Outcome::Unsupported { .. })), "got {out:?}");
+    assert_eq!(std::fs::read(&path).unwrap(), content, "bytes landed plain");
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  // detect → Supported but the guarded apply is skipped (faked permission failure):
+  // the bytes land via a plain write, Outcome::Skipped(IntegrityRevert).
+  #[test]
+  fn compress_bytes_falls_back_to_plain_on_a_guarded_skip() {
+    let dir = scratch("guard-skip");
+    let path = dir.join("x.node");
+    let content = fake_addon();
+    let backend = FakeBackend {
+      detect: Support::Supported,
+      apply_errno: Some(13), // EACCES
+    };
+    let out = compress_bytes_with(&backend, &path, &content, &Gate::any());
+    assert!(
+      matches!(
+        out,
+        Ok(Outcome::Skipped {
+          reason: SkipReason::IntegrityRevert
+        })
+      ),
+      "got {out:?}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), content, "bytes landed plain");
     std::fs::remove_dir_all(&dir).ok();
   }
 }

@@ -183,6 +183,29 @@ mod tests {
     assert!(matches!(compress_file(p), Err(Error::NotFound(_))));
   }
 
+  #[test]
+  fn error_display_and_source() {
+    let nf = Error::NotFound(std::path::PathBuf::from("/x"));
+    assert!(nf.to_string().contains("not found"));
+    assert!(std::error::Error::source(&nf).is_none());
+    let io = Error::Io {
+      context: "ctx",
+      source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+    };
+    assert!(io.to_string().contains("ctx"));
+    assert!(std::error::Error::source(&io).is_some());
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn probe_reports_a_support_variant_without_mutating() {
+    // probe never errors on an existing path — it returns a Support.
+    assert!(matches!(
+      probe(std::path::Path::new("/dev/null")),
+      Ok(Support::Supported | Support::AlreadyCompressed | Support::Unsupported(_))
+    ));
+  }
+
   #[cfg(unix)]
   #[test]
   fn compress_file_reports_unsupported_on_a_non_compressing_fs() {

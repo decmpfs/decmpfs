@@ -13,6 +13,8 @@ import { TARGETS } from './targets.mts'
 const nodeRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const mainManifest = JSON.parse(readFileSync(join(nodeRoot, 'package.json'), 'utf8'))
 
+// napi-rs addon naming, kept in lockstep with index.cjs: glibc Linux is `-gnu`,
+// musl Linux is `-musl`, Windows is `-msvc`, macOS none.
 function hostTriple(): string {
   const { arch, platform } = process
   if (platform === 'win32') {
@@ -35,7 +37,7 @@ for (const target of TARGETS) {
 
   const nodeFile = `decmpfs.${target.triple}.node`
   const manifest = {
-    name: `@jdalton/decmpfs-${target.triple}`,
+    name: `@decmpfs/${target.triple}`,
     version: mainManifest.version,
     description: `decmpfs prebuilt binary for ${target.triple}.`,
     license: mainManifest.license,

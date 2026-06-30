@@ -74,6 +74,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Real publishes run in the `release` environment (reviewer gate + a tighter
+    # OIDC trusted-publisher match); dry runs skip it for friction-free testing.
+    environment: ${{ inputs.dry-run == 'true' && '' || 'release' }}
     permissions:
       # Needed for npm provenance via OIDC trusted publishing.
       id-token: write

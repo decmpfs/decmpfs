@@ -246,3 +246,29 @@ pub(crate) fn apply_bytes(
     }
   }
 }
+
+/// Copy-on-write clone via the `FICLONE` ioctl (btrfs / XFS reflink) — shares
+/// the extents AND their compression property, so a compressed source stays
+/// compressed at zero cost. `Ok(false)` means "cannot clone here"
+/// (cross-device, non-reflink FS, …) and the caller falls back to a byte copy;
+/// a failed clone removes the empty destination it created.
+pub(crate) fn clone_file(src: &Path, dest: &Path) -> Result<bool, Error> {
+  use std::os::fd::AsRawFd;
+  let src_file = match std::fs::File::open(src) {
+    Ok(file) => file,
+    Err(_) => return Ok(false),
+  };
+  let dest_file = match std::fs::File::create(dest) {
+    Ok(file) => file,
+    Err(_) => return Ok(false),
+  };
+  // FICLONE = _IOW(0x94, 9, int) — stable since Linux 4.5.
+  const FICLONE: libc::c_ulong = 0x4004_9409;
+  let cloned =
+    unsafe { libc::ioctl(dest_file.as_raw_fd(), FICLONE, src_file.as_raw_fd()) } == 0;
+  if !cloned {
+    drop(dest_file);
+    let _ = std::fs::remove_file(dest);
+  }
+  Ok(cloned)
+}

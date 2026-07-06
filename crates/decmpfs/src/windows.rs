@@ -173,3 +173,10 @@ pub(crate) fn apply_bytes(
 pub(crate) fn compressed_on_disk(_path: &Path) -> Result<Option<bool>, Error> {
   Ok(None)
 }
+
+/// NTFS has no reflink/clone primitive (ReFS block-cloning is out of scope) —
+/// always report "cannot clone" so the caller takes the byte-copy path, which
+/// re-applies `FSCTL_SET_COMPRESSION` at the destination.
+pub(crate) fn clone_file(_src: &Path, _dest: &Path) -> Result<bool, Error> {
+  Ok(false)
+}

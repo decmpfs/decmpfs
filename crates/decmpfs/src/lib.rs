@@ -222,6 +222,144 @@ fn compress_bytes_with<B: Backend>(
   }
 }
 
+/// What a [`copy_file`] did — a SUCCESS shape, same contract as [`Outcome`]:
+/// `Err` is reserved for genuine I/O failures; the copy itself always lands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CopyOutcome {
+  /// Copy-on-write clone (`clonefile` / `FICLONE`) — the extents are shared,
+  /// so the source's compression state carries over at zero cost.
+  Cloned { compressed: bool },
+  /// Byte copy plus one-pass recompression at the destination (a compressed
+  /// source that could not be cloned — cross-volume, non-reflink FS).
+  CopiedCompressed { before: u64, after: u64 },
+  /// Byte copy landed plain: the source was plain, the destination FS has no
+  /// transparent compression, or a fail-soft skip (`skipped` carries the
+  /// reason when the source WAS compressed but the state could not follow).
+  CopiedPlain { skipped: Option<SkipReason> },
+}
+
+/// Attempt a copy-on-write clone of `src` at `dest` (`clonefile(2)` on macOS,
+/// the `FICLONE` ioctl on Linux) — the zero-cost way to copy a compressed file
+/// WITH its compression. `Ok(true)` = cloned; `Ok(false)` = this pairing can't
+/// clone (cross-volume, non-reflink FS, an existing destination on macOS,
+/// Windows) and the caller decides the fallback — [`copy_file`] is the
+/// clone-then-fallback composition, and a Node-`COPYFILE_FICLONE_FORCE`-shaped
+/// caller turns `false` into its error.
+pub fn try_clone_file(src: &Path, dest: &Path) -> Result<bool, Error> {
+  if !src.exists() {
+    return Err(Error::NotFound(src.to_path_buf()));
+  }
+  Os.clone_file(src, dest)
+}
+
+/// Copy `src` to `dest` preserving transparent filesystem compression — the
+/// `fs.copyFile` the OS never shipped. A plain byte copy silently re-inflates
+/// a compressed file (the kernel hands every reader the full logical bytes,
+/// and that is what gets written back out); this copy keeps the on-disk
+/// savings.
+///
+/// Strategy, in order:
+/// 1. A copy-on-write clone (`clonefile(2)` on macOS, the `FICLONE` ioctl on
+///    Linux) shares the extents, so a compressed source stays compressed at
+///    zero cost — and a plain source clones plain.
+/// 2. When cloning is impossible (cross-volume, non-reflink FS, Windows), the
+///    logical bytes are copied and, if the source was compressed, the
+///    destination is written back compressed via the same guarded one-pass
+///    path as [`compress_bytes`].
+/// 3. A plain source is copied plain — a copy never changes compression state.
+///
+/// `fs.copyFile` parity: an existing `dest` is replaced, and the source's
+/// permission bits carry over. Fail-soft like the rest of the crate: on any
+/// backend skip the plain copy still stands, reported in the outcome.
+pub fn copy_file(src: &Path, dest: &Path) -> Result<CopyOutcome, Error> {
+  copy_file_with(&Os, src, dest)
+}
+
+/// `copy_file` over an injectable [`Backend`] — production always threads
+/// [`Os`]; tests drive the clone and fallback arms with fakes.
+fn copy_file_with<B: Backend>(backend: &B, src: &Path, dest: &Path) -> Result<CopyOutcome, Error> {
+  if !src.exists() {
+    return Err(Error::NotFound(src.to_path_buf()));
+  }
+  if dest.exists() {
+    // A copy onto itself (same path, a hardlink, a symlink alias) is a no-op
+    // success — otherwise the replace step below would clobber the copy's own
+    // source. The extents are 100% shared, which is what `Cloned` states.
+    if is_same_file(src, dest) {
+      return Ok(CopyOutcome::Cloned {
+        compressed: backend.is_already_compressed(src).unwrap_or(false),
+      });
+    }
+    // clonefile refuses an existing destination; replace-by-default is the
+    // `fs.copyFile` contract this mirrors.
+    std::fs::remove_file(dest).map_err(|source| Error::Io {
+      context: "replace existing destination",
+      source,
+    })?;
+  }
+  // On a filesystem with no compression signal this is a capability gap, not a
+  // failure — treat it as "plain source" and keep copying.
+  let compressed_src = backend.is_already_compressed(src).unwrap_or(false);
+  if backend.clone_file(src, dest)? {
+    return Ok(CopyOutcome::Cloned {
+      compressed: compressed_src,
+    });
+  }
+  // A normal read hands back the full logical bytes regardless of the
+  // source's on-disk representation.
+  let content = std::fs::read(src).map_err(|source| Error::Io {
+    context: "read copy source",
+    source,
+  })?;
+  let mode = std::fs::metadata(src).ok().map(|meta| meta.permissions());
+  if !compressed_src {
+    plain_write(dest, &content)?;
+    if let Some(mode) = mode {
+      let _ = std::fs::set_permissions(dest, mode);
+    }
+    return Ok(CopyOutcome::CopiedPlain { skipped: None });
+  }
+  let outcome = compress_bytes_with(backend, dest, &content, &Gate::any())?;
+  if let Some(mode) = mode {
+    let _ = std::fs::set_permissions(dest, mode);
+  }
+  Ok(match outcome {
+    Outcome::Compressed { before, after } | Outcome::NoGain { before, after } => {
+      CopyOutcome::CopiedCompressed { before, after }
+    }
+    // Unreachable from a fresh destination (compress_bytes maps an
+    // already-compressed detect to a plain write), kept total + truthful.
+    Outcome::AlreadyCompressed { before } => CopyOutcome::CopiedCompressed { before, after: before },
+    Outcome::Unsupported { .. } => CopyOutcome::CopiedPlain { skipped: None },
+    Outcome::Skipped { reason } => CopyOutcome::CopiedPlain {
+      skipped: Some(reason),
+    },
+  })
+}
+
+/// True when both paths name the same underlying file — same dev+inode on
+/// unix (catches hardlinks and symlink aliases), canonical-path equality
+/// elsewhere. Guards [`copy_file`]'s replace-by-default from removing its own
+/// source.
+#[cfg(unix)]
+fn is_same_file(a: &Path, b: &Path) -> bool {
+  use std::os::unix::fs::MetadataExt;
+  match (std::fs::metadata(a), std::fs::metadata(b)) {
+    (Ok(meta_a), Ok(meta_b)) => meta_a.dev() == meta_b.dev() && meta_a.ino() == meta_b.ino(),
+    _ => false,
+  }
+}
+
+/// See the unix twin above; Windows has no stable inode surface in std, so
+/// canonical-path equality is the honest signal there.
+#[cfg(not(unix))]
+fn is_same_file(a: &Path, b: &Path) -> bool {
+  match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+    (Ok(canon_a), Ok(canon_b)) => canon_a == canon_b,
+    _ => false,
+  }
+}
+
 /// Fail-soft plain atomic write: sibling temp + fsync + rename. The never-break-the
 /// -install floor under every `compress_bytes` fallback.
 fn plain_write(path: &Path, content: &[u8]) -> Result<(), Error> {
@@ -294,6 +432,12 @@ pub(crate) trait Backend {
     mode: Option<std::fs::Permissions>,
   ) -> Result<(), Error>;
   fn compressed_on_disk(&self, path: &Path) -> Result<Option<bool>, Error>;
+  /// Copy-on-write clone. `Ok(false)` = "cannot clone here" → the caller falls
+  /// back to a byte copy. Defaulted so fakes without a clone path exercise the
+  /// fallback arms.
+  fn clone_file(&self, _src: &Path, _dest: &Path) -> Result<bool, Error> {
+    Ok(false)
+  }
 }
 
 /// The real, cfg-selected OS backend.
@@ -319,6 +463,9 @@ impl Backend for Os {
   }
   fn compressed_on_disk(&self, path: &Path) -> Result<Option<bool>, Error> {
     backend::compressed_on_disk(path)
+  }
+  fn clone_file(&self, src: &Path, dest: &Path) -> Result<bool, Error> {
+    backend::clone_file(src, dest)
   }
 }
 
@@ -375,6 +522,9 @@ mod tests {
 
   fn scratch(tag: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("decmpfs-{tag}-{}", std::process::id()));
+    // A pid-recycled leftover FILE at this path makes create_dir_all fail
+    // with AlreadyExists; clear it so the scratch dir always materializes.
+    let _ = std::fs::remove_file(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
   }
@@ -681,6 +831,252 @@ mod tests {
       "got {out:?}"
     );
     assert_eq!(std::fs::read(&path).unwrap(), content, "bytes landed plain");
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn copy_file_errors_when_the_source_is_missing() {
+    let dir = scratch("copy-missing");
+    let out = copy_file(&dir.join("absent.node"), &dir.join("dest.node"));
+    assert!(matches!(out, Err(Error::NotFound(_))));
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  /// A fallback fake: no clone path (trait default), reports the source
+  /// compressed, and its apply actually writes — so the guarded one-pass copy
+  /// arm runs end to end and classifies via the backend signal.
+  struct RecompressingFake;
+
+  impl Backend for RecompressingFake {
+    fn detect(&self, _path: &Path) -> Result<Support, Error> {
+      Ok(Support::Supported)
+    }
+    fn is_already_compressed(&self, _path: &Path) -> Result<bool, Error> {
+      Ok(true)
+    }
+    fn apply_inplace(&self, _path: &Path) -> Result<(), Error> {
+      Ok(())
+    }
+    fn apply_bytes(
+      &self,
+      path: &Path,
+      content: &[u8],
+      _mode: Option<std::fs::Permissions>,
+    ) -> Result<(), Error> {
+      std::fs::write(path, content).map_err(|source| Error::Io {
+        context: "fake write",
+        source,
+      })
+    }
+    fn compressed_on_disk(&self, _path: &Path) -> Result<Option<bool>, Error> {
+      Ok(Some(true))
+    }
+  }
+
+  #[test]
+  fn copy_file_recompresses_at_the_destination_when_it_cannot_clone() {
+    let dir = scratch("copy-recompress");
+    let src = dir.join("src.node");
+    let dest = dir.join("dest.node");
+    let content = fake_addon();
+    std::fs::write(&src, &content).unwrap();
+    let out = copy_file_with(&RecompressingFake, &src, &dest).unwrap();
+    assert!(
+      matches!(out, CopyOutcome::CopiedCompressed { .. }),
+      "got {out:?}"
+    );
+    assert_eq!(std::fs::read(&dest).unwrap(), content, "bytes are identical");
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn copy_file_copies_a_plain_source_plain_and_replaces_the_destination() {
+    let dir = scratch("copy-plain");
+    let src = dir.join("src.node");
+    let dest = dir.join("dest.node");
+    let content = fake_addon();
+    std::fs::write(&src, &content).unwrap();
+    std::fs::write(&dest, b"stale destination").unwrap();
+    let backend = FakeBackend {
+      detect: Support::Supported,
+      apply_errno: None,
+    };
+    let out = copy_file_with(&backend, &src, &dest).unwrap();
+    assert_eq!(out, CopyOutcome::CopiedPlain { skipped: None });
+    assert_eq!(std::fs::read(&dest).unwrap(), content, "destination replaced");
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn copy_file_lands_plain_and_reports_the_skip_when_recompression_fails() {
+    struct SkippingFake;
+    impl Backend for SkippingFake {
+      fn detect(&self, _path: &Path) -> Result<Support, Error> {
+        Ok(Support::Supported)
+      }
+      fn is_already_compressed(&self, _path: &Path) -> Result<bool, Error> {
+        Ok(true)
+      }
+      fn apply_inplace(&self, _path: &Path) -> Result<(), Error> {
+        Ok(())
+      }
+      fn apply_bytes(
+        &self,
+        _path: &Path,
+        _content: &[u8],
+        _mode: Option<std::fs::Permissions>,
+      ) -> Result<(), Error> {
+        Err(Error::Io {
+          context: "fake apply",
+          source: std::io::Error::from_raw_os_error(13), // EACCES
+        })
+      }
+      fn compressed_on_disk(&self, _path: &Path) -> Result<Option<bool>, Error> {
+        Ok(Some(false))
+      }
+    }
+    let dir = scratch("copy-skip");
+    let src = dir.join("src.node");
+    let dest = dir.join("dest.node");
+    let content = fake_addon();
+    std::fs::write(&src, &content).unwrap();
+    let out = copy_file_with(&SkippingFake, &src, &dest).unwrap();
+    assert!(
+      matches!(out, CopyOutcome::CopiedPlain { skipped: Some(_) }),
+      "got {out:?}"
+    );
+    assert_eq!(std::fs::read(&dest).unwrap(), content, "bytes still landed");
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn copy_file_onto_itself_is_a_noop_reported_as_cloned() {
+    let dir = scratch("copy-self");
+    let src = dir.join("src.node");
+    let content = fake_addon();
+    std::fs::write(&src, &content).unwrap();
+    let backend = FakeBackend {
+      detect: Support::Supported,
+      apply_errno: None,
+    };
+    let out = copy_file_with(&backend, &src, &src).unwrap();
+    assert!(matches!(out, CopyOutcome::Cloned { .. }), "got {out:?}");
+    assert_eq!(std::fs::read(&src).unwrap(), content, "source untouched");
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn is_same_file_sees_hardlinks_and_distinct_files() {
+    let dir = scratch("same-file");
+    let a = dir.join("a.node");
+    let b = dir.join("b.node");
+    std::fs::write(&a, b"bytes").unwrap();
+    std::fs::write(&b, b"bytes").unwrap();
+    assert!(is_same_file(&a, &a), "identical path");
+    assert!(!is_same_file(&a, &b), "distinct files");
+    let link = dir.join("a-link.node");
+    std::fs::hard_link(&a, &link).unwrap();
+    assert!(is_same_file(&a, &link), "hardlink shares the inode");
+    assert!(
+      !is_same_file(&a, &dir.join("absent.node")),
+      "a missing path is never the same file"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn copy_file_errors_when_the_destination_cannot_be_replaced() {
+    let dir = scratch("copy-dest-dir");
+    let src = dir.join("src.node");
+    std::fs::write(&src, fake_addon()).unwrap();
+    // A directory at `dest` makes the replace step's remove_file fail.
+    let dest = dir.join("dest.node");
+    std::fs::create_dir(&dest).unwrap();
+    let backend = FakeBackend {
+      detect: Support::Supported,
+      apply_errno: None,
+    };
+    let out = copy_file_with(&backend, &src, &dest);
+    assert!(
+      matches!(
+        out,
+        Err(Error::Io {
+          context: "replace existing destination",
+          ..
+        })
+      ),
+      "got {out:?}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn copy_file_errors_when_the_source_is_unreadable() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch("copy-unreadable");
+    let src = dir.join("src.node");
+    let dest = dir.join("dest.node");
+    std::fs::write(&src, fake_addon()).unwrap();
+    std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let backend = FakeBackend {
+      detect: Support::Supported,
+      apply_errno: None,
+    };
+    let out = copy_file_with(&backend, &src, &dest);
+    std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o644)).ok();
+    assert!(
+      matches!(
+        out,
+        Err(Error::Io {
+          context: "read copy source",
+          ..
+        })
+      ),
+      "got {out:?}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn try_clone_file_errors_when_the_source_is_missing() {
+    let dir = scratch("clone-missing");
+    let out = try_clone_file(&dir.join("absent.node"), &dir.join("dest.node"));
+    assert!(matches!(out, Err(Error::NotFound(_))));
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[cfg(target_os = "macos")]
+  #[test]
+  fn try_clone_file_clones_on_apfs_and_declines_an_existing_destination() {
+    let dir = scratch("clone-try");
+    let src = dir.join("src.node");
+    let dest = dir.join("dest.node");
+    std::fs::write(&src, fake_addon()).unwrap();
+    assert_eq!(try_clone_file(&src, &dest).unwrap(), true, "fresh clone");
+    // clonefile refuses an existing destination — reported as cannot-clone,
+    // never an error.
+    assert_eq!(try_clone_file(&src, &dest).unwrap(), false);
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[cfg(target_os = "macos")]
+  #[test]
+  fn copy_file_clones_a_compressed_source_on_apfs() {
+    let dir = scratch("copy-clone");
+    let src = dir.join("src.node");
+    let dest = dir.join("dest.node");
+    let content = fake_addon();
+    let wrote = compress_bytes(&src, &content, &Gate::any()).unwrap();
+    // Only meaningful when the scratch volume actually compressed the source.
+    if !matches!(wrote, Outcome::Compressed { .. }) {
+      std::fs::remove_dir_all(&dir).ok();
+      return;
+    }
+    let out = copy_file(&src, &dest).unwrap();
+    assert_eq!(out, CopyOutcome::Cloned { compressed: true });
+    assert!(backend::is_already_compressed(&dest).unwrap());
+    assert_eq!(std::fs::read(&dest).unwrap(), content, "bytes are identical");
     std::fs::remove_dir_all(&dir).ok();
   }
 }

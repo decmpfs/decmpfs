@@ -272,6 +272,17 @@ pub(crate) fn apply_bytes(
   })
 }
 
+/// Copy-on-write clone via `clonefile(2)` — shares the extents AND the decmpfs
+/// state, so a compressed source stays compressed at zero cost. `Ok(false)`
+/// means "cannot clone here" (cross-volume, unsupported FS, …) and the caller
+/// falls back to a byte copy; a failed clonefile never leaves a partial
+/// destination.
+pub(crate) fn clone_file(src: &Path, dest: &Path) -> Result<bool, Error> {
+  let csrc = cstring(src)?;
+  let cdest = cstring(dest)?;
+  Ok(unsafe { libc::clonefile(csrc.as_ptr(), cdest.as_ptr(), 0) } == 0)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;

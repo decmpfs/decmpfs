@@ -32,3 +32,9 @@ pub(crate) fn apply_bytes(
 pub(crate) fn compressed_on_disk(_path: &Path) -> Result<Option<bool>, Error> {
   Ok(None)
 }
+
+/// No clone primitive on an unsupported platform — the caller takes the plain
+/// byte-copy path.
+pub(crate) fn clone_file(_src: &Path, _dest: &Path) -> Result<bool, Error> {
+  Ok(false)
+}

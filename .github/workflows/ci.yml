@@ -79,9 +79,16 @@ jobs:
       - name: Test crate
         shell: bash
         run: '"$SFW_BIN" cargo test --workspace --locked'
+      - name: Install addon devDependencies (typescript for the .d.cts typecheck)
+        working-directory: napi/decmpfs
+        run: '"$SFW_BIN" npm install'
+        shell: bash
       - name: Build addon
         working-directory: napi/decmpfs
         run: npm run build
+      - name: Typecheck the addon type declarations
+        working-directory: napi/decmpfs
+        run: npm run typecheck
       - name: Test addon
         working-directory: napi/decmpfs
         run: npm test

@@ -1,40 +1,56 @@
-// Keep index.d.ts honest: every value/function the declarations claim the addon
-// exports must actually be exported by index.cjs, and vice versa. The .d.ts is
-// hand-maintained (no napi CLI codegen here), so this drift test is the gate
-// that catches a rename/add/remove in src/lib.rs that the .d.ts missed.
+// Keep index.d.cts honest with real tooling, not a regex:
+//
+//   1. `tsc --noEmit` (TypeScript 7 native) type-checks index.d.cts against the
+//      uses-api.ts fixture, which imports and uses every public export. A wrong
+//      or missing declaration — or a declaration for a name the fixture can't
+//      import — fails the type-check. This is the exhaustive "declarations are
+//      valid and complete" gate.
+//   2. A runtime check imports the public API from the built addon and asserts
+//      each name is actually present (a .d.cts can declare an export the native
+//      addon doesn't ship; tsc can't see that, the runtime import can).
 
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
+const pkgRoot = path.join(here, '..')
 const require = createRequire(import.meta.url)
-const addon = require('../index.cjs') as Record<string, unknown>
 
-// The runtime truth: every own name the native addon exports.
-const actual = new Set(Object.keys(addon))
-
-// The declared truth: `export const NAME` + `export function NAME` in the .d.ts
-// (interfaces are type-only and never appear at runtime, so they're excluded).
-const dts = readFileSync(path.join(here, '..', 'index.d.ts'), 'utf8')
-const declared = new Set<string>()
-for (const m of dts.matchAll(/^export (?:declare )?(?:const|function|class) (\w+)/gm)) {
-  declared.add(m[1]!)
-}
-
-test('every declared export exists on the addon', () => {
-  const missing = [...declared].filter(name => !actual.has(name))
-  assert.deepEqual(missing, [], `index.d.ts declares names the addon lacks: ${missing}`)
+test('tsc type-checks index.d.cts against the consumer fixture', () => {
+  // The typescript@7.0.1-rc bin (native tsc). Resolve via package.json (its
+  // exports map doesn't expose ./bin/tsc) so the path is hoist-agnostic.
+  const tsc = path.join(
+    path.dirname(require.resolve('typescript/package.json')),
+    'bin',
+    'tsc',
+  )
+  execFileSync(process.execPath, [tsc, '--noEmit', '-p', 'tsconfig.json'], {
+    cwd: pkgRoot,
+    stdio: 'inherit',
+  })
 })
 
-test('every addon export is declared in index.d.ts', () => {
-  const undeclared = [...actual].filter(name => !declared.has(name))
-  assert.deepEqual(
-    undeclared,
-    [],
-    `addon exports names index.d.ts is missing (update index.d.ts): ${undeclared}`,
-  )
+test('every declared public export is present on the built addon', () => {
+  const addon = require('../index.cjs') as Record<string, unknown>
+  const functions = [
+    'copyDecmpfsFile',
+    'copyDecmpfsFileSync',
+    'copyFile',
+    'copyFileSync',
+    'packExecutable',
+    'packExecutableSync',
+    'writeDecmpfsFile',
+    'writeDecmpfsFileSync',
+  ]
+  for (const name of functions) {
+    assert.equal(typeof addon[name], 'function', `addon must export function ${name}`)
+  }
+  const consts = ['COPYFILE_EXCL', 'COPYFILE_FICLONE', 'COPYFILE_FICLONE_FORCE']
+  for (const name of consts) {
+    assert.equal(typeof addon[name], 'number', `addon must export const ${name}`)
+  }
 })

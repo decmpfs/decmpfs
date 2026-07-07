@@ -6,8 +6,8 @@
   "repository": "https://github.com/decmpfs/decmpfs",
   "keywords": ["apfs", "btrfs", "compression", "decmpfs", "ntfs"],
   "main": "index.cjs",
-  "types": "index.d.ts",
-  "files": ["index.cjs", "index.d.ts"],
+  "types": "index.d.cts",
+  "files": ["index.cjs", "index.d.cts"],
   "engines": {
     "node": ">=18"
   },
@@ -25,6 +25,10 @@
   },
   "scripts": {
     "build": "node scripts/build.mts",
-    "test": "node --test"
+    "test": "node --test",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "7.0.1-rc"
   }
 }

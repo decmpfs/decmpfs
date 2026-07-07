@@ -348,14 +348,26 @@ mod tests {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
     let out = apply_inplace(&path);
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).ok();
-    assert!(matches!(out, Err(Error::Io { context: "read", .. })));
+    assert!(matches!(
+      out,
+      Err(Error::Io {
+        context: "read",
+        ..
+      })
+    ));
     std::fs::remove_dir_all(&dir).ok();
   }
 
   #[test]
   fn setxattr_errors_on_a_missing_path() {
     let out = setxattr(c"/no/such/decmpfs/path", c"com.apple.decmpfs", b"x");
-    assert!(matches!(out, Err(Error::Io { context: "setxattr", .. })));
+    assert!(matches!(
+      out,
+      Err(Error::Io {
+        context: "setxattr",
+        ..
+      })
+    ));
   }
 
   #[test]

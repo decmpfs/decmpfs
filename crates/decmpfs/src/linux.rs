@@ -264,8 +264,7 @@ pub(crate) fn clone_file(src: &Path, dest: &Path) -> Result<bool, Error> {
   };
   // FICLONE = _IOW(0x94, 9, int) — stable since Linux 4.5.
   const FICLONE: libc::c_ulong = 0x4004_9409;
-  let cloned =
-    unsafe { libc::ioctl(dest_file.as_raw_fd(), FICLONE, src_file.as_raw_fd()) } == 0;
+  let cloned = unsafe { libc::ioctl(dest_file.as_raw_fd(), FICLONE, src_file.as_raw_fd()) } == 0;
   if !cloned {
     drop(dest_file);
     let _ = std::fs::remove_file(dest);

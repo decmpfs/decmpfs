@@ -1,4 +1,10 @@
 {
   "private": true,
-  "workspaces": ["napi/*", "napi/decmpfs/npm/*"]
+  "workspaces": ["napi/*", "napi/decmpfs/npm/*"],
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "fix": "node scripts/lint.mjs --fix",
+    "lint": "node scripts/lint.mjs",
+    "prepare": "node scripts/install-git-hooks.mjs"
+  }
 }

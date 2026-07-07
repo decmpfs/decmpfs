@@ -1,0 +1,17 @@
+#!/bin/sh
+# Pre-commit: staged-scoped format check — fast (rustfmt on the staged .rs
+# files only), so landing stays quick. HUSKY=0 or --no-verify skip it; the
+# full gate reruns in pre-push and CI either way.
+
+if [ "${HUSKY-}" = "0" ]; then
+  echo "[git-hooks] HUSKY=0 — skipping pre-commit."
+  exit 0
+fi
+
+# Skip during rebase — commits are being replayed.
+GIT_DIR="$(git rev-parse --git-dir 2>/dev/null)"
+if [ -d "${GIT_DIR}/rebase-merge" ] || [ -d "${GIT_DIR}/rebase-apply" ]; then
+  exit 0
+fi
+
+node "$(dirname "$0")/../scripts/lint.mjs" --staged

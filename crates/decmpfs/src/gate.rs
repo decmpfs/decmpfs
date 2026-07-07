@@ -282,7 +282,10 @@ mod tests {
     assert_eq!(parse_size(""), Err(GateParseError::Number));
     assert_eq!(parse_size("MB"), Err(GateParseError::Number));
     assert_eq!(parse_size("10PB"), Err(GateParseError::Unit));
-    assert_eq!(parse_size("99999999999999999999GB"), Err(GateParseError::Number));
+    assert_eq!(
+      parse_size("99999999999999999999GB"),
+      Err(GateParseError::Number)
+    );
     assert_eq!(
       parse_size("18446744073709551615KB"),
       Err(GateParseError::Overflow)
@@ -319,7 +322,10 @@ mod tests {
 
   #[test]
   fn glob_matches_node_addons_anywhere() {
-    assert!(glob_match("**/*.node", "node_modules/foo/build/Release/addon.node"));
+    assert!(glob_match(
+      "**/*.node",
+      "node_modules/foo/build/Release/addon.node"
+    ));
     assert!(glob_match("**/*.node", "addon.node"));
     assert!(glob_match("*.node", "addon.node"));
     // A single * must not cross a path separator.

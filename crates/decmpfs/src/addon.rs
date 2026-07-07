@@ -274,14 +274,20 @@ mod tests {
   fn pressed_data_round_trips() {
     let raw = b"\x7fELF this is the original addon payload, repeated.".repeat(40);
     let section = synth_section(&raw, false);
-    assert_eq!(decode_pressed_data(&section).as_deref(), Some(raw.as_slice()));
+    assert_eq!(
+      decode_pressed_data(&section).as_deref(),
+      Some(raw.as_slice())
+    );
   }
 
   #[test]
   fn pressed_data_round_trips_with_config() {
     let raw = vec![0xABu8; 5000];
     let section = synth_section(&raw, true);
-    assert_eq!(decode_pressed_data(&section).as_deref(), Some(raw.as_slice()));
+    assert_eq!(
+      decode_pressed_data(&section).as_deref(),
+      Some(raw.as_slice())
+    );
   }
 
   #[test]
@@ -328,13 +334,13 @@ mod tests {
     // mach_header_64
     bin[0..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]); // MH_MAGIC_64 LE bytes
     bin[16..20].copy_from_slice(&1u32.to_le_bytes()); // ncmds = 1
-    // segment_command_64 at offset 32
+                                                      // segment_command_64 at offset 32
     let seg = 32;
     bin[seg..seg + 4].copy_from_slice(&LC_SEGMENT_64.to_le_bytes());
     bin[seg + 4..seg + 8].copy_from_slice(&(seg_cmd_len as u32).to_le_bytes());
     bin[seg + 8..seg + 12].copy_from_slice(b"SMOL");
     bin[seg + 64..seg + 68].copy_from_slice(&1u32.to_le_bytes()); // nsects = 1
-    // section_64 at offset seg + 72
+                                                                  // section_64 at offset seg + 72
     let sect = seg + 72;
     bin[sect..sect + 14].copy_from_slice(b"__PRESSED_DATA");
     bin[sect + 40..sect + 48].copy_from_slice(&(blob.len() as u64).to_le_bytes()); // size

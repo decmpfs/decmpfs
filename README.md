@@ -82,13 +82,17 @@ Node (an N-API binding in [`napi/`](napi/), async + `Sync` variants of each):
 ## Development
 
 ```sh
+npm install            # wires git hooks (core.hooksPath -> .git-hooks)
+npm run lint           # rustfmt over modified files (--fix to rewrite)
+npm run check          # fmt --check + clippy -D warnings + version parity
 cargo test --workspace
 npm test --prefix napi/decmpfs
-node scripts/check-versions.mjs
 ```
 
-The napi addon rebuilds with `npm run build` in `napi/decmpfs/`. The coverage
-badge (`assets/coverage-score.svg`) is regenerated from `cargo llvm-cov` output.
+Pre-commit runs the staged-scoped lint (fast); pre-push runs the full check
+plus the crate tests. The napi addon rebuilds with `npm run build` in
+`napi/decmpfs/`. The coverage badge (`assets/coverage-score.svg`) is
+regenerated from `cargo llvm-cov` output.
 
 ## License
 

@@ -329,7 +329,10 @@ fn copy_file_with<B: Backend>(backend: &B, src: &Path, dest: &Path) -> Result<Co
     }
     // Unreachable from a fresh destination (compress_bytes maps an
     // already-compressed detect to a plain write), kept total + truthful.
-    Outcome::AlreadyCompressed { before } => CopyOutcome::CopiedCompressed { before, after: before },
+    Outcome::AlreadyCompressed { before } => CopyOutcome::CopiedCompressed {
+      before,
+      after: before,
+    },
     Outcome::Unsupported { .. } => CopyOutcome::CopiedPlain { skipped: None },
     Outcome::Skipped { reason } => CopyOutcome::CopiedPlain {
       skipped: Some(reason),
@@ -515,7 +518,6 @@ impl Backend for FakeBackend {
   }
 }
 
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -628,10 +630,7 @@ mod tests {
     // No file at `path` yet — compress_bytes creates it in one pass.
     let out = compress_bytes(&path, &content, &Gate::any());
     assert!(
-      matches!(
-        out,
-        Ok(Outcome::Compressed { .. } | Outcome::NoGain { .. })
-      ),
+      matches!(out, Ok(Outcome::Compressed { .. } | Outcome::NoGain { .. })),
       "one-pass APFS write → applied, got {out:?}"
     );
     assert!(path.exists(), "file was created");
@@ -748,7 +747,10 @@ mod tests {
     let target = dir.join("a-dir");
     std::fs::create_dir_all(&target).unwrap();
     let out = compress_bytes(&target, &fake_addon(), &Gate::any());
-    assert!(out.is_err(), "cannot write a file over a directory, got {out:?}");
+    assert!(
+      out.is_err(),
+      "cannot write a file over a directory, got {out:?}"
+    );
     assert!(target.is_dir(), "the directory is left intact");
     std::fs::remove_dir_all(&dir).ok();
   }
@@ -804,7 +806,10 @@ mod tests {
       apply_errno: None,
     };
     let out = compress_bytes_with(&backend, &path, &content, &Gate::any());
-    assert!(matches!(out, Ok(Outcome::Unsupported { .. })), "got {out:?}");
+    assert!(
+      matches!(out, Ok(Outcome::Unsupported { .. })),
+      "got {out:?}"
+    );
     assert_eq!(std::fs::read(&path).unwrap(), content, "bytes landed plain");
     std::fs::remove_dir_all(&dir).ok();
   }
@@ -885,7 +890,11 @@ mod tests {
       matches!(out, CopyOutcome::CopiedCompressed { .. }),
       "got {out:?}"
     );
-    assert_eq!(std::fs::read(&dest).unwrap(), content, "bytes are identical");
+    assert_eq!(
+      std::fs::read(&dest).unwrap(),
+      content,
+      "bytes are identical"
+    );
     std::fs::remove_dir_all(&dir).ok();
   }
 
@@ -903,7 +912,11 @@ mod tests {
     };
     let out = copy_file_with(&backend, &src, &dest).unwrap();
     assert_eq!(out, CopyOutcome::CopiedPlain { skipped: None });
-    assert_eq!(std::fs::read(&dest).unwrap(), content, "destination replaced");
+    assert_eq!(
+      std::fs::read(&dest).unwrap(),
+      content,
+      "destination replaced"
+    );
     std::fs::remove_dir_all(&dir).ok();
   }
 
@@ -1053,10 +1066,10 @@ mod tests {
     let src = dir.join("src.node");
     let dest = dir.join("dest.node");
     std::fs::write(&src, fake_addon()).unwrap();
-    assert_eq!(try_clone_file(&src, &dest).unwrap(), true, "fresh clone");
+    assert!(try_clone_file(&src, &dest).unwrap(), "fresh clone");
     // clonefile refuses an existing destination — reported as cannot-clone,
     // never an error.
-    assert_eq!(try_clone_file(&src, &dest).unwrap(), false);
+    assert!(!try_clone_file(&src, &dest).unwrap());
     std::fs::remove_dir_all(&dir).ok();
   }
 
@@ -1076,7 +1089,11 @@ mod tests {
     let out = copy_file(&src, &dest).unwrap();
     assert_eq!(out, CopyOutcome::Cloned { compressed: true });
     assert!(backend::is_already_compressed(&dest).unwrap());
-    assert_eq!(std::fs::read(&dest).unwrap(), content, "bytes are identical");
+    assert_eq!(
+      std::fs::read(&dest).unwrap(),
+      content,
+      "bytes are identical"
+    );
     std::fs::remove_dir_all(&dir).ok();
   }
 }

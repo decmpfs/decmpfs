@@ -1,6 +1,10 @@
 packages:
   - napi/*
   - napi/decmpfs/npm/*
+# Pinned dev-tool versions shared via `catalog:` references in package.json.
+catalog:
+  '@resvg/resvg-wasm': 2.6.2
+  typescript: 7.0.2
 minimumReleaseAgeExclude:
   # typescript 7.0.2 + its per-platform binding family — first stable of the
   # native 7.x compiler line, pulled ahead of the soak by owner directive

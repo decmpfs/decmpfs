@@ -67,4 +67,10 @@ run('tsc --noEmit (napi type declarations)', path.join(root, 'node_modules', '.b
   'nodenext',
   path.join(root, 'napi', 'decmpfs', 'index.d.cts'),
 ])
+// Brand-asset guard: render the "for X" lockups and assert the "for" label stays
+// small relative to the wordmark (it regressed to oversized once).
+run('asset render test (for-label sizing)', 'node', [
+  '--test',
+  path.join(root, 'scripts', 'repo', 'gen', 'logo.test.mts'),
+])
 console.log('check: all green.')

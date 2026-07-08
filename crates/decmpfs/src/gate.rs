@@ -258,6 +258,7 @@ fn glob_inner(pat: &[u8], text: &[u8]) -> bool {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
   use super::*;
 

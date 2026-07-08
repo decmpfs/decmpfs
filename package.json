@@ -2,6 +2,7 @@
   "private": true,
   "scripts": {
     "check": "node scripts/check.mts",
+    "coverage": "node scripts/coverage.mts",
     "fix": "node scripts/lint.mts --fix",
     "lint": "node scripts/lint.mts",
     "prepare": "node scripts/install-git-hooks.mts",

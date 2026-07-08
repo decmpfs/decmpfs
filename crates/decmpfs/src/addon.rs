@@ -244,6 +244,7 @@ fn cstr_at(strtab: &[u8], off: usize) -> Option<&[u8]> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
   use super::*;
 

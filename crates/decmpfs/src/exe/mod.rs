@@ -171,6 +171,7 @@ pub fn self_replace_and_exec(argv: &[String]) -> Result<bool, Error> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
   use super::*;
 

@@ -476,6 +476,7 @@ pub(crate) fn resign(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
   use super::*;
   use crate::exe::section::{build_footer, build_section_payload, find_footer};

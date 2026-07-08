@@ -24,6 +24,14 @@ default = []
 addon = ["dep:zstd", "dep:sha2"]
 exe = ["dep:zstd", "dep:sha2"]
 
+[lints.rust]
+# `coverage` / `coverage_nightly` are set by cargo-llvm-cov (nightly) to gate the
+# `#[coverage(off)]` test-module markers; declare them so stable builds don't warn.
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(coverage)',
+  'cfg(coverage_nightly)',
+] }
+
 [dependencies]
 # Only the `addon` / `exe` feature codec/integrity deps; the core stays dep-free.
 zstd = { version = "=0.13.3", optional = true }

@@ -72,6 +72,7 @@ pub(crate) fn magic_prefix(path: &Path) -> Result<[u8; 4], Error> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
   use super::*;
 

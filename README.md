@@ -82,17 +82,20 @@ Node (an N-API binding in [`napi/`](napi/), async + `Sync` variants of each):
 ## Development
 
 ```sh
-npm install            # wires git hooks (core.hooksPath -> .git-hooks)
-npm run lint           # rustfmt over modified files (--fix to rewrite)
-npm run check          # fmt --check + clippy -D warnings + version parity
+pnpm install           # wires git hooks (core.hooksPath -> .git-hooks)
+pnpm run lint          # rustfmt over modified files (--fix to rewrite)
+pnpm run check         # fmt --check + clippy -D warnings + version parity
+pnpm run coverage      # production coverage (pins nightly for #[coverage(off)])
 cargo test --workspace
-npm test --prefix napi/decmpfs
+pnpm --prefix napi/decmpfs test
 ```
 
 Pre-commit runs the staged-scoped lint (fast); pre-push runs the full check
-plus the crate tests. The napi addon rebuilds with `npm run build` in
-`napi/decmpfs/`. The coverage badge (`assets/coverage-score.svg`) is
-regenerated from `cargo llvm-cov` output.
+plus the crate tests. The napi addon rebuilds with `pnpm run build` in
+`napi/decmpfs/`. Coverage runs via `pnpm run coverage`, which pins a nightly
+toolchain (the test modules are marked `#[coverage(off)]` so the number reflects
+production code) and fails loud if nightly or its `llvm-tools` are missing; the
+badge (`assets/coverage-score.svg`) is regenerated from that output.
 
 ## License
 

@@ -19,6 +19,11 @@
 //! sources; all slice indexing is length-guarded.
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
+// On a nightly `cargo llvm-cov` run, cargo-llvm-cov sets `coverage_nightly`,
+// enabling `#[coverage(off)]` so test-only code is dropped from the report and it
+// reflects PRODUCTION coverage. A no-op on stable (the cfg is unset), so ordinary
+// builds and `cargo test` are unaffected.
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
 use std::path::Path;
 
@@ -487,6 +492,7 @@ pub(crate) struct FakeBackend {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl FakeBackend {
   fn apply_result(&self) -> Result<(), Error> {
     match self.apply_errno {
@@ -500,6 +506,7 @@ impl FakeBackend {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl Backend for FakeBackend {
   fn detect(&self, _path: &Path) -> Result<Support, Error> {
     Ok(self.detect)
@@ -524,6 +531,7 @@ impl Backend for FakeBackend {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
   use super::*;
 

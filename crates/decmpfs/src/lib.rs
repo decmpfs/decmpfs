@@ -402,10 +402,12 @@ pub mod addon;
 #[cfg(feature = "exe")]
 pub mod exe;
 mod gate;
+mod remove;
 mod safety;
 mod verify;
 
 pub use gate::{Gate, GateParseError, SizePredicate, DEFAULT_GLOB};
+pub use remove::{rm, RmOptions};
 
 #[cfg(target_os = "linux")]
 #[path = "linux.rs"]

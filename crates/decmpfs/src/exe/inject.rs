@@ -335,7 +335,7 @@ fn inject_macho(stub: &[u8], section_body: &[u8]) -> Result<Vec<u8>, String> {
   // >4 GiB payload would otherwise truncate silently and corrupt the LINKEDIT tables.
   if (linkedit_end as u64)
     .checked_add(delta)
-    .map_or(true, |end| end > u64::from(u32::MAX))
+    .is_none_or(|end| end > u64::from(u32::MAX))
   {
     return Err(format!(
       "injected payload too large: file offset {linkedit_end} + {delta} exceeds the u32 Mach-O limit"

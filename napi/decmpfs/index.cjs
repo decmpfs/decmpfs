@@ -1,9 +1,9 @@
 'use strict'
 
 // Resolve the prebuilt addon for this host. Each supported target ships as an
-// optional dependency (@decmpfs/<triple>) carrying only its `.node`, so npm
+// optional dependency (@decmpfs/<triple>) carrying only its `.node`, so pnpm
 // installs just the one matching this platform/arch/abi. A local
-// `./decmpfs.node` (from `npm run build`) is the dev fallback.
+// `./decmpfs.node` (from `pnpm run build`) is the dev fallback.
 
 const { arch, platform } = process
 
@@ -34,7 +34,7 @@ function load() {
   } catch {}
   throw new Error(
     `decmpfs: no prebuilt binary for ${triple}. Install the optional dependency ` +
-      `${platformPackage}, or build from source with \`npm run build\`.`,
+      `${platformPackage}, or build from source with \`pnpm run build\`.`,
   )
 }
 

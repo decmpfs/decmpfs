@@ -1,4 +1,4 @@
-// Type-only fixture: `npm run typecheck` (tsc 7 native) compiles this against
+// Type-only fixture: `pnpm run typecheck` (tsc 7 native) compiles this against
 // index.d.ts. It imports EVERY public export and uses it at the declared types,
 // so a wrong or missing declaration fails the type-check; the `@ts-expect-error`
 // lines assert the declarations reject misuse. Not executed — no runtime side

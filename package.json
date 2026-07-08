@@ -4,8 +4,13 @@
     "check": "node scripts/check.mts",
     "coverage": "node scripts/coverage.mts",
     "fix": "node scripts/lint.mts --fix",
+    "gen": "node scripts/repo/gen/logo.mts",
+    "gen:logo": "node scripts/repo/gen/logo.mts",
     "lint": "node scripts/lint.mts",
     "prepare": "node scripts/install-git-hooks.mts",
     "release": "node scripts/release.mts"
+  },
+  "devDependencies": {
+    "@resvg/resvg-wasm": "2.6.2"
   }
 }

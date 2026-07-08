@@ -6,7 +6,11 @@ settings:
 
 importers:
 
-  .: {}
+  .:
+    devDependencies:
+      '@resvg/resvg-wasm':
+        specifier: 2.6.2
+        version: 2.6.2
 
   napi/decmpfs:
     devDependencies:
@@ -15,6 +19,10 @@ importers:
         version: 7.0.1-rc
 
 packages:
+
+  '@resvg/resvg-wasm@2.6.2':
+    resolution: {integrity: sha512-FqALmHI8D4o6lk/LRWDnhw95z5eO+eAa6ORjVg09YRR7BkcM6oPHU9uyC0gtQG5vpFLvgpeU4+zEAz2H8APHNw==}
+    engines: {node: '>= 10'}
 
   '@typescript/typescript-aix-ppc64@7.0.1-rc':
     resolution: {integrity: sha512-oqq2ZfEJ7BQuufcC3QBQndZLPNyamYNHLao8lKRBeeSkZKypBqxPSgkzrcFZtbYcIaBvpiyUnQP9MT7DEYHWbw==}
@@ -142,6 +150,8 @@ packages:
     hasBin: true
 
 snapshots:
+
+  '@resvg/resvg-wasm@2.6.2': {}
 
   '@typescript/typescript-aix-ppc64@7.0.1-rc':
     optional: true

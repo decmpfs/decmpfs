@@ -114,6 +114,28 @@ test('invalid gate size predicate — throws', () => {
   assert.equal(existsSync(p), false, 'nothing written on a bad gate')
 })
 
+test('a write into a missing directory throws a Node-shaped ENOENT', () => {
+  const missing = join(dir, 'no-such-subdir', 'out.node')
+  assert.throws(
+    () => decmpfs.writeDecmpfsFileSync(missing, compressible),
+    (err: NodeJS.ErrnoException) => {
+      assert.equal(err.code, 'ENOENT')
+      assert.equal(err.errno, -2)
+      assert.equal(err.syscall, 'open')
+      return true
+    },
+  )
+})
+
+test('async: a write into a missing directory rejects with a Node-shaped ENOENT', async () => {
+  const missing = join(dir, 'no-such-subdir', 'out-async.node')
+  await assert.rejects(decmpfs.writeDecmpfsFile(missing, compressible), (err: NodeJS.ErrnoException) => {
+    assert.equal(err.code, 'ENOENT')
+    assert.equal(err.syscall, 'open')
+    return true
+  })
+})
+
 test('on APFS the compressible file is smaller on disk than its logical size', () => {
   const p = join(dir, 'apfs.node')
   const r = decmpfs.writeDecmpfsFileSync(p, compressible, { glob: '**/*.node' })

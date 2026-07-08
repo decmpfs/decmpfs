@@ -106,14 +106,17 @@ fn to_result(outcome: decmpfs::Outcome, raw_len: usize) -> DecmpfsResult {
 }
 
 // The shared logic for both the sync and async entry points.
-fn run(path: &str, data: &[u8], r: &Resolved) -> Result<DecmpfsResult> {
+fn run(path: &str, data: &[u8], r: &Resolved) -> std::result::Result<DecmpfsResult, NapiFail> {
   let target = Path::new(path);
   let exists = target.exists();
   if exists && r.error_on_exist {
-    return Err(Error::new(
-      Status::GenericFailure,
-      format!("file already exists: {path}"),
-    ));
+    return Err(NapiFail::Fs(FsErr {
+      code: "EEXIST",
+      errno: -17,
+      detail: "file already exists".to_string(),
+      syscall: "open",
+      path: path.to_string(),
+    }));
   }
   if exists && !r.force {
     // Don't replace — report a skip rather than throw.
@@ -125,12 +128,12 @@ fn run(path: &str, data: &[u8], r: &Resolved) -> Result<DecmpfsResult> {
     });
   }
   let gate = decmpfs::Gate::new(r.glob.as_deref(), r.min_size.as_deref())
-    .map_err(|e| Error::new(Status::InvalidArg, format!("invalid gate: {e}")))?;
+    .map_err(|e| NapiFail::Arg(format!("invalid gate: {e}")))?;
 
   // Direct write: compress_bytes applies the gate to `target` itself — correct.
   if !r.atomic {
     let outcome = decmpfs::compress_bytes(target, data, &gate)
-      .map_err(|e| Error::new(Status::GenericFailure, format!("write: {e}")))?;
+      .map_err(|e| NapiFail::Fs(fs_err_decmpfs(&e, "open", path)))?;
     return Ok(to_result(outcome, data.len()));
   }
 
@@ -149,13 +152,13 @@ fn run(path: &str, data: &[u8], r: &Resolved) -> Result<DecmpfsResult> {
   let result = if gate.matches(&normalized, data.len() as u64) {
     let outcome = decmpfs::compress_bytes(&tmp, data, &decmpfs::Gate::any()).map_err(|e| {
       let _ = std::fs::remove_file(&tmp);
-      Error::new(Status::GenericFailure, format!("write: {e}"))
+      NapiFail::Fs(fs_err_decmpfs(&e, "open", path))
     })?;
     to_result(outcome, data.len())
   } else {
     std::fs::write(&tmp, data).map_err(|e| {
       let _ = std::fs::remove_file(&tmp);
-      Error::new(Status::GenericFailure, format!("write: {e}"))
+      NapiFail::Fs(fs_err_io(&e, "open", path))
     })?;
     DecmpfsResult {
       compressed: false,
@@ -166,7 +169,7 @@ fn run(path: &str, data: &[u8], r: &Resolved) -> Result<DecmpfsResult> {
   };
   std::fs::rename(&tmp, target).map_err(|e| {
     let _ = std::fs::remove_file(&tmp);
-    Error::new(Status::GenericFailure, format!("rename: {e}"))
+    NapiFail::Fs(fs_err_io(&e, "rename", path))
   })?;
   Ok(result)
 }
@@ -174,11 +177,12 @@ fn run(path: &str, data: &[u8], r: &Resolved) -> Result<DecmpfsResult> {
 /// Synchronously write `data` to `path` as an OS-FS-compressed file.
 #[napi]
 pub fn write_decmpfs_file_sync(
+  env: Env,
   path: String,
   data: Buffer,
   options: Option<WriteDecmpfsOptions>,
 ) -> Result<DecmpfsResult> {
-  run(&path, &data, &resolve(options))
+  run(&path, &data, &resolve(options)).map_err(|f| f.into_error(&env))
 }
 
 /// The async task backing [`writeDecmpfsFile`] — runs the write on the libuv pool.
@@ -186,6 +190,7 @@ pub struct WriteTask {
   path: String,
   data: Vec<u8>,
   opts: Resolved,
+  fail: Option<NapiFail>,
 }
 
 #[napi]
@@ -194,11 +199,24 @@ impl Task for WriteTask {
   type JsValue = DecmpfsResult;
 
   fn compute(&mut self) -> Result<Self::Output> {
-    run(&self.path, &self.data, &self.opts)
+    match run(&self.path, &self.data, &self.opts) {
+      Ok(output) => Ok(output),
+      Err(f) => {
+        self.fail = Some(f);
+        Err(Error::from_reason("fs error"))
+      }
+    }
   }
 
   fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
     Ok(output)
+  }
+
+  fn reject(&mut self, env: Env, err: Error) -> Result<Self::JsValue> {
+    match self.fail.take() {
+      Some(f) => Err(f.into_error(&env)),
+      None => Err(err),
+    }
   }
 }
 
@@ -213,6 +231,7 @@ pub fn write_decmpfs_file(
     path,
     data: data.to_vec(),
     opts: resolve(options),
+    fail: None,
   })
 }
 
@@ -277,27 +296,34 @@ fn copy_outcome_to_result(
   }
 }
 
-fn src_logical(src: &Path) -> Result<usize> {
+fn src_logical(src: &Path, path: &str) -> std::result::Result<usize, NapiFail> {
   std::fs::metadata(src)
     .map(|meta| meta.len() as usize)
-    .map_err(|e| Error::new(Status::GenericFailure, format!("stat source: {e}")))
+    .map_err(|e| NapiFail::Fs(fs_err_io(&e, "stat", path)))
 }
 
 // The shared logic for both cp-shaped copy entry points.
-fn run_copy(src: &str, dest: &str, options: Option<CopyDecmpfsOptions>) -> Result<DecmpfsResult> {
+fn run_copy(
+  src: &str,
+  dest: &str,
+  options: Option<CopyDecmpfsOptions>,
+) -> std::result::Result<DecmpfsResult, NapiFail> {
   let (force, error_on_exist) = match options {
     Some(o) => (o.force.unwrap_or(true), o.error_on_exist.unwrap_or(false)),
     None => (true, false),
   };
   let src_path = Path::new(src);
   let dest_path = Path::new(dest);
-  let logical = src_logical(src_path)?;
+  let logical = src_logical(src_path, src)?;
   if dest_path.exists() {
     if error_on_exist {
-      return Err(Error::new(
-        Status::GenericFailure,
-        format!("file already exists: {dest}"),
-      ));
+      return Err(NapiFail::Fs(FsErr {
+        code: "EEXIST",
+        errno: -17,
+        detail: "file already exists".to_string(),
+        syscall: "copyfile",
+        path: dest.to_string(),
+      }));
     }
     if !force {
       // Don't replace — report a skip rather than throw.
@@ -310,7 +336,7 @@ fn run_copy(src: &str, dest: &str, options: Option<CopyDecmpfsOptions>) -> Resul
     }
   }
   let outcome = decmpfs::copy_file(src_path, dest_path)
-    .map_err(|e| Error::new(Status::GenericFailure, format!("copy: {e}")))?;
+    .map_err(|e| NapiFail::Fs(fs_err_decmpfs(&e, "copyfile", dest)))?;
   Ok(copy_outcome_to_result(outcome, dest_path, logical))
 }
 
@@ -319,11 +345,12 @@ fn run_copy(src: &str, dest: &str, options: Option<CopyDecmpfsOptions>) -> Resul
 /// compressed file).
 #[napi]
 pub fn copy_decmpfs_file_sync(
+  env: Env,
   src: String,
   dest: String,
   options: Option<CopyDecmpfsOptions>,
 ) -> Result<DecmpfsResult> {
-  run_copy(&src, &dest, options)
+  run_copy(&src, &dest, options).map_err(|f| f.into_error(&env))
 }
 
 /// The async task backing [`copyDecmpfsFile`] — runs the copy on the libuv pool.
@@ -332,6 +359,7 @@ pub struct CopyTask {
   dest: String,
   force: Option<bool>,
   error_on_exist: Option<bool>,
+  fail: Option<NapiFail>,
 }
 
 #[napi]
@@ -340,18 +368,31 @@ impl Task for CopyTask {
   type JsValue = DecmpfsResult;
 
   fn compute(&mut self) -> Result<Self::Output> {
-    run_copy(
+    match run_copy(
       &self.src,
       &self.dest,
       Some(CopyDecmpfsOptions {
         force: self.force,
         error_on_exist: self.error_on_exist,
       }),
-    )
+    ) {
+      Ok(output) => Ok(output),
+      Err(f) => {
+        self.fail = Some(f);
+        Err(Error::from_reason("fs error"))
+      }
+    }
   }
 
   fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
     Ok(output)
+  }
+
+  fn reject(&mut self, env: Env, err: Error) -> Result<Self::JsValue> {
+    match self.fail.take() {
+      Some(f) => Err(f.into_error(&env)),
+      None => Err(err),
+    }
   }
 }
 
@@ -371,6 +412,7 @@ pub fn copy_decmpfs_file(
     dest,
     force,
     error_on_exist,
+    fail: None,
   })
 }
 
@@ -380,25 +422,35 @@ pub fn copy_decmpfs_file(
 // FICLONE_FORCE always throws ENOSYS on macOS — libuv has no clonefile path);
 // 0 and COPYFILE_FICLONE both take the clone-first, compression-preserving
 // copy (this binding never does a compression-dropping plain byte copy).
-fn run_copy_file(src: &str, dest: &str, mode: Option<u32>) -> Result<DecmpfsResult> {
+fn run_copy_file(
+  src: &str,
+  dest: &str,
+  mode: Option<u32>,
+) -> std::result::Result<DecmpfsResult, NapiFail> {
   let mode = mode.unwrap_or(0);
   let src_path = Path::new(src);
   let dest_path = Path::new(dest);
-  let logical = src_logical(src_path)?;
+  let logical = src_logical(src_path, src)?;
   if mode & COPYFILE_EXCL != 0 && dest_path.exists() {
-    return Err(Error::new(
-      Status::GenericFailure,
-      format!("EEXIST: file already exists, copyfile -> {dest}"),
-    ));
+    return Err(NapiFail::Fs(FsErr {
+      code: "EEXIST",
+      errno: -17,
+      detail: "file already exists".to_string(),
+      syscall: "copyfile",
+      path: dest.to_string(),
+    }));
   }
   if mode & COPYFILE_FICLONE_FORCE != 0 {
     let cloned = decmpfs::try_clone_file(src_path, dest_path)
-      .map_err(|e| Error::new(Status::GenericFailure, format!("copy: {e}")))?;
+      .map_err(|e| NapiFail::Fs(fs_err_decmpfs(&e, "copyfile", dest)))?;
     if !cloned {
-      return Err(Error::new(
-        Status::GenericFailure,
-        format!("ENOTSUP: cannot copy-on-write clone, copyfile {src} -> {dest} (existing destination, cross-volume, or a filesystem without clone support)"),
-      ));
+      return Err(NapiFail::Fs(FsErr {
+        code: "ENOTSUP",
+        errno: -45,
+        detail: "cannot copy-on-write clone (existing destination, cross-volume, or a filesystem without clone support)".to_string(),
+        syscall: "copyfile",
+        path: dest.to_string(),
+      }));
     }
     return Ok(DecmpfsResult {
       compressed: decmpfs::probe(dest_path)
@@ -410,14 +462,19 @@ fn run_copy_file(src: &str, dest: &str, mode: Option<u32>) -> Result<DecmpfsResu
     });
   }
   let outcome = decmpfs::copy_file(src_path, dest_path)
-    .map_err(|e| Error::new(Status::GenericFailure, format!("copy: {e}")))?;
+    .map_err(|e| NapiFail::Fs(fs_err_decmpfs(&e, "copyfile", dest)))?;
   Ok(copy_outcome_to_result(outcome, dest_path, logical))
 }
 
 /// Synchronous `fs.copyFileSync` parity, decmpfs-aware. See [`copyFile`].
 #[napi]
-pub fn copy_file_sync(src: String, dest: String, mode: Option<u32>) -> Result<DecmpfsResult> {
-  run_copy_file(&src, &dest, mode)
+pub fn copy_file_sync(
+  env: Env,
+  src: String,
+  dest: String,
+  mode: Option<u32>,
+) -> Result<DecmpfsResult> {
+  run_copy_file(&src, &dest, mode).map_err(|f| f.into_error(&env))
 }
 
 /// The async task backing [`copyFile`].
@@ -425,6 +482,7 @@ pub struct CopyFileTask {
   src: String,
   dest: String,
   mode: Option<u32>,
+  fail: Option<NapiFail>,
 }
 
 #[napi]
@@ -433,11 +491,24 @@ impl Task for CopyFileTask {
   type JsValue = DecmpfsResult;
 
   fn compute(&mut self) -> Result<Self::Output> {
-    run_copy_file(&self.src, &self.dest, self.mode)
+    match run_copy_file(&self.src, &self.dest, self.mode) {
+      Ok(output) => Ok(output),
+      Err(f) => {
+        self.fail = Some(f);
+        Err(Error::from_reason("fs error"))
+      }
+    }
   }
 
   fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
     Ok(output)
+  }
+
+  fn reject(&mut self, env: Env, err: Error) -> Result<Self::JsValue> {
+    match self.fail.take() {
+      Some(f) => Err(f.into_error(&env)),
+      None => Err(err),
+    }
   }
 }
 
@@ -447,7 +518,12 @@ impl Task for CopyFileTask {
 /// always throws ENOSYS. Here both clone via `clonefile(2)`.
 #[napi]
 pub fn copy_file(src: String, dest: String, mode: Option<u32>) -> AsyncTask<CopyFileTask> {
-  AsyncTask::new(CopyFileTask { src, dest, mode })
+  AsyncTask::new(CopyFileTask {
+    src,
+    dest,
+    mode,
+    fail: None,
+  })
 }
 
 /// Options for [`packExecutable`] / [`packExecutableSync`].
@@ -480,9 +556,9 @@ pub struct PackExeResult {
   pub skipped_gate: bool,
 }
 
-fn pack_gate(options: &PackExeOptions) -> Result<decmpfs::Gate> {
+fn pack_gate(options: &PackExeOptions) -> std::result::Result<decmpfs::Gate, NapiFail> {
   decmpfs::Gate::new(options.gate_glob.as_deref(), options.gate_size.as_deref())
-    .map_err(|e| Error::new(Status::InvalidArg, format!("invalid gate: {e}")))
+    .map_err(|e| NapiFail::Arg(format!("invalid gate: {e}")))
 }
 
 fn pack_outcome_to_result(outcome: decmpfs::exe::PackOutcome) -> PackExeResult {
@@ -506,7 +582,11 @@ fn pack_outcome_to_result(outcome: decmpfs::exe::PackOutcome) -> PackExeResult {
 // The shared logic for both the sync and async pack entry points. Injects the
 // payload into the caller-supplied `options.stub` — the Node host is not a
 // self-replacing runtime, so there is no `current_exe()` default.
-fn run_pack(src: &str, dest: &str, options: PackExeOptions) -> Result<PackExeResult> {
+fn run_pack(
+  src: &str,
+  dest: &str,
+  options: PackExeOptions,
+) -> std::result::Result<PackExeResult, NapiFail> {
   let gate = pack_gate(&options)?;
   let outcome = decmpfs::exe::pack_executable_with_stub(
     Path::new(&options.stub),
@@ -514,7 +594,15 @@ fn run_pack(src: &str, dest: &str, options: PackExeOptions) -> Result<PackExeRes
     Path::new(dest),
     &gate,
   )
-  .map_err(|e| Error::new(Status::GenericFailure, format!("pack: {e}")))?;
+  .map_err(|e| {
+    NapiFail::Fs(FsErr {
+      code: "UNKNOWN",
+      errno: 0,
+      detail: format!("pack: {e}"),
+      syscall: "pack",
+      path: src.to_string(),
+    })
+  })?;
   Ok(pack_outcome_to_result(outcome))
 }
 
@@ -524,11 +612,12 @@ fn run_pack(src: &str, dest: &str, options: PackExeOptions) -> Result<PackExeRes
 /// execs it; every later run is the plain materialized executable.
 #[napi]
 pub fn pack_executable_sync(
+  env: Env,
   src: String,
   dest: String,
   options: PackExeOptions,
 ) -> Result<PackExeResult> {
-  run_pack(&src, &dest, options)
+  run_pack(&src, &dest, options).map_err(|f| f.into_error(&env))
 }
 
 /// The async task backing [`packExecutable`] — runs the pack on the libuv pool.
@@ -536,6 +625,7 @@ pub struct PackExeTask {
   src: String,
   dest: String,
   options: PackExeOptions,
+  fail: Option<NapiFail>,
 }
 
 #[napi]
@@ -544,7 +634,7 @@ impl Task for PackExeTask {
   type JsValue = PackExeResult;
 
   fn compute(&mut self) -> Result<Self::Output> {
-    run_pack(
+    match run_pack(
       &self.src,
       &self.dest,
       PackExeOptions {
@@ -552,11 +642,24 @@ impl Task for PackExeTask {
         gate_glob: self.options.gate_glob.clone(),
         gate_size: self.options.gate_size.clone(),
       },
-    )
+    ) {
+      Ok(output) => Ok(output),
+      Err(f) => {
+        self.fail = Some(f);
+        Err(Error::from_reason("pack error"))
+      }
+    }
   }
 
   fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
     Ok(output)
+  }
+
+  fn reject(&mut self, env: Env, err: Error) -> Result<Self::JsValue> {
+    match self.fail.take() {
+      Some(f) => Err(f.into_error(&env)),
+      None => Err(err),
+    }
   }
 }
 
@@ -568,7 +671,12 @@ pub fn pack_executable(
   dest: String,
   options: PackExeOptions,
 ) -> AsyncTask<PackExeTask> {
-  AsyncTask::new(PackExeTask { src, dest, options })
+  AsyncTask::new(PackExeTask {
+    src,
+    dest,
+    options,
+    fail: None,
+  })
 }
 
 // ── Node-shaped fs errors ────────────────────────────────────────────────────
@@ -577,9 +685,36 @@ pub fn pack_executable(
 // path } and a Node-format message ("ENOENT: no such file or directory, rm
 // '/x'"), then throw it — matching fs.rm / fs.rmSync.
 
+/// The parts of a Node-shaped fs error, carried so an async `Task` (whose
+/// `compute` has no `Env`) can rebuild the JS error in `reject`.
+struct FsErr {
+  code: &'static str,
+  errno: i32,
+  detail: String,
+  syscall: &'static str,
+  path: String,
+}
+
+/// A binding failure: a Node fs-shaped error, or an argument-validation error (an
+/// invalid gate). Both are realized against an `Env` at the FFI boundary.
+enum NapiFail {
+  Fs(FsErr),
+  Arg(String),
+}
+
+impl NapiFail {
+  fn into_error(self, env: &Env) -> Error {
+    match self {
+      NapiFail::Fs(fe) => build_fs_error(env, &fe),
+      NapiFail::Arg(msg) => Error::new(Status::InvalidArg, msg),
+    }
+  }
+}
+
+// POSIX errno → Node `code`. Shared across macOS + Linux, except ENOTEMPTY
+// (macOS 66, Linux 39).
+#[cfg(not(windows))]
 fn errno_name(raw: i32) -> &'static str {
-  // Common fs errnos; the numbers below are shared across macOS + Linux, except
-  // ENOTEMPTY (macOS 66, Linux 39), handled per-target.
   match raw {
     1 => "EPERM",
     2 => "ENOENT",
@@ -599,9 +734,30 @@ fn errno_name(raw: i32) -> &'static str {
   }
 }
 
+// (code, errno) for a positive OS error number, per platform. Windows
+// `raw_os_error()` is the Win32 GetLastError space, which does NOT coincide with
+// POSIX — map it to the Node `code` a caller checks (`err.code === 'EBUSY'`) with
+// the negated POSIX-equivalent errno for consistency.
+#[cfg(not(windows))]
+fn os_errno(raw: i32) -> (&'static str, i32) {
+  (errno_name(raw), -raw)
+}
+#[cfg(windows)]
+fn os_errno(raw: i32) -> (&'static str, i32) {
+  match raw {
+    2 | 3 => ("ENOENT", -2),     // FILE_NOT_FOUND / PATH_NOT_FOUND
+    5 => ("EACCES", -13),        // ACCESS_DENIED
+    19 => ("EROFS", -30),        // WRITE_PROTECT
+    32 | 33 => ("EBUSY", -16),   // SHARING_VIOLATION / LOCK_VIOLATION
+    80 | 183 => ("EEXIST", -17), // FILE_EXISTS / ALREADY_EXISTS
+    145 => ("ENOTEMPTY", -39),   // DIR_NOT_EMPTY
+    _ => ("UNKNOWN", -raw),
+  }
+}
+
 // uv-style lowercase strerror ("no such file or directory"), stripped of the
 // Rust "(os error N)" suffix.
-fn node_strerror(raw: i32) -> String {
+fn os_strerror(raw: i32) -> String {
   let full = std::io::Error::from_raw_os_error(raw).to_string();
   full
     .split(" (os error")
@@ -610,48 +766,83 @@ fn node_strerror(raw: i32) -> String {
     .to_lowercase()
 }
 
-// (code, errno) for a decmpfs error — NotFound is ENOENT; an Io carries the OS
-// errno.
-fn fs_code_errno(err: &decmpfs::Error) -> (&'static str, i32) {
-  match err {
-    decmpfs::Error::NotFound(_) => ("ENOENT", -2),
-    decmpfs::Error::Io { source, .. } => match source.raw_os_error() {
-      Some(raw) if raw > 0 => (errno_name(raw), -raw),
-      // No OS errno — the error was built from an ErrorKind (e.g. the
-      // safe-delete guard uses PermissionDenied). Map to the closest fs code.
-      _ => match source.kind() {
-        std::io::ErrorKind::PermissionDenied => ("EACCES", -13),
-        std::io::ErrorKind::NotFound => ("ENOENT", -2),
-        std::io::ErrorKind::AlreadyExists => ("EEXIST", -17),
-        _ => ("UNKNOWN", 0),
-      },
+// (code, errno, detail) for a raw io::Error. An error with no OS errno was built
+// from an ErrorKind; map the common kinds, and for anything unmapped keep the
+// error's OWN message as the detail rather than rendering "undefined error: 0".
+fn io_parts(err: &std::io::Error) -> (&'static str, i32, String) {
+  match err.raw_os_error() {
+    Some(raw) if raw > 0 => {
+      let (code, errno) = os_errno(raw);
+      (code, errno, os_strerror(raw))
+    }
+    _ => match err.kind() {
+      std::io::ErrorKind::PermissionDenied => ("EACCES", -13, "permission denied".to_string()),
+      std::io::ErrorKind::NotFound => ("ENOENT", -2, "no such file or directory".to_string()),
+      std::io::ErrorKind::AlreadyExists => ("EEXIST", -17, "file exists".to_string()),
+      _ => ("UNKNOWN", 0, err.to_string()),
     },
   }
 }
 
-// Build + throw a Node-shaped fs error; returns the pending-exception marker.
-fn throw_fs(env: &Env, code: &str, errno: i32, syscall: &str, path: &str) -> Error {
-  let strerr = node_strerror(if errno == 0 { 0 } else { -errno });
-  let message = format!("{code}: {strerr}, {syscall} '{path}'");
+// (code, errno, detail) for a decmpfs error — NotFound is ENOENT; an Io defers to
+// io_parts, but when the source has no OS errno the decmpfs Error's own Display
+// (context + cause) is the detail, so the known cause is never discarded.
+fn fs_parts(err: &decmpfs::Error) -> (&'static str, i32, String) {
+  match err {
+    decmpfs::Error::NotFound(_) => ("ENOENT", -2, "no such file or directory".to_string()),
+    decmpfs::Error::Io { source, .. } => {
+      let (code, errno, detail) = io_parts(source);
+      if errno == 0 {
+        (code, errno, err.to_string())
+      } else {
+        (code, errno, detail)
+      }
+    }
+  }
+}
+
+fn fs_err_decmpfs(err: &decmpfs::Error, syscall: &'static str, path: &str) -> FsErr {
+  let (code, errno, detail) = fs_parts(err);
+  FsErr {
+    code,
+    errno,
+    detail,
+    syscall,
+    path: path.to_string(),
+  }
+}
+
+fn fs_err_io(err: &std::io::Error, syscall: &'static str, path: &str) -> FsErr {
+  let (code, errno, detail) = io_parts(err);
+  FsErr {
+    code,
+    errno,
+    detail,
+    syscall,
+    path: path.to_string(),
+  }
+}
+
+// Build a Node-shaped fs Error with { code, errno, syscall, path } + a Node-format
+// message. Returned through the Err channel — napi THROWS it for a sync fn and
+// REJECTS the promise with it for an async Task, so both deliver the same error.
+// (env.throw would fire OUTSIDE the promise on the async path → uncaught.)
+fn build_fs_error(env: &Env, fe: &FsErr) -> Error {
+  let message = format!("{}: {}, {} '{}'", fe.code, fe.detail, fe.syscall, fe.path);
   match env.create_error(Error::new(Status::GenericFailure, message)) {
     Ok(mut obj) => {
-      let _ = obj.set_named_property("code", code);
-      let _ = obj.set_named_property("errno", errno);
-      let _ = obj.set_named_property("syscall", syscall);
-      let _ = obj.set_named_property("path", path);
-      // Return the shaped object through the Err channel — napi THROWS it for a
-      // sync fn and REJECTS the promise with it for an async Task, so both paths
-      // deliver the same { code, errno, syscall, path } error. (env.throw would
-      // fire OUTSIDE the promise on the async path → an uncaught exception.)
+      let _ = obj.set_named_property("code", fe.code);
+      let _ = obj.set_named_property("errno", fe.errno);
+      let _ = obj.set_named_property("syscall", fe.syscall);
+      let _ = obj.set_named_property("path", fe.path.as_str());
       Error::from(obj.to_unknown())
     }
     Err(e) => e,
   }
 }
 
-fn throw_decmpfs(env: &Env, err: &decmpfs::Error, syscall: &str, path: &str) -> Error {
-  let (code, errno) = fs_code_errno(err);
-  throw_fs(env, code, errno, syscall, path)
+fn throw_decmpfs(env: &Env, err: &decmpfs::Error, syscall: &'static str, path: &str) -> Error {
+  build_fs_error(env, &fs_err_decmpfs(err, syscall, path))
 }
 
 // ── rm / rmSync (Node fs.rm parity) ──────────────────────────────────────────
@@ -695,7 +886,7 @@ pub fn rm_sync(env: Env, path: String, options: Option<RmOptions>) -> Result<()>
 pub struct RmTask {
   path: String,
   opts: decmpfs::RmOptions,
-  err: Option<(&'static str, i32)>,
+  err: Option<FsErr>,
 }
 
 #[napi]
@@ -707,7 +898,7 @@ impl Task for RmTask {
     match decmpfs::rm(Path::new(&self.path), &self.opts) {
       Ok(()) => Ok(()),
       Err(e) => {
-        self.err = Some(fs_code_errno(&e));
+        self.err = Some(fs_err_decmpfs(&e, "rm", &self.path));
         Err(Error::from_reason("fs error"))
       }
     }
@@ -719,7 +910,7 @@ impl Task for RmTask {
 
   fn reject(&mut self, env: Env, err: Error) -> Result<()> {
     match self.err.take() {
-      Some((code, errno)) => Err(throw_fs(&env, code, errno, "rm", &self.path)),
+      Some(fe) => Err(build_fs_error(&env, &fe)),
       None => Err(err),
     }
   }
@@ -757,7 +948,7 @@ pub fn compress_file_sync(env: Env, path: String) -> Result<DecmpfsResult> {
 /// The async task backing [`compressFile`].
 pub struct CompressFileTask {
   path: String,
-  err: Option<(&'static str, i32)>,
+  err: Option<FsErr>,
 }
 
 #[napi]
@@ -769,7 +960,7 @@ impl Task for CompressFileTask {
     match decmpfs::compress_file(Path::new(&self.path)) {
       Ok(outcome) => Ok(to_result(outcome, file_len(&self.path))),
       Err(e) => {
-        self.err = Some(fs_code_errno(&e));
+        self.err = Some(fs_err_decmpfs(&e, "open", &self.path));
         Err(Error::from_reason("fs error"))
       }
     }
@@ -781,7 +972,7 @@ impl Task for CompressFileTask {
 
   fn reject(&mut self, env: Env, err: Error) -> Result<DecmpfsResult> {
     match self.err.take() {
-      Some((code, errno)) => Err(throw_fs(&env, code, errno, "open", &self.path)),
+      Some(fe) => Err(build_fs_error(&env, &fe)),
       None => Err(err),
     }
   }

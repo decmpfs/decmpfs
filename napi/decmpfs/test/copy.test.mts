@@ -96,14 +96,17 @@ test('sync: errorOnExist throws on an existing destination', () => {
   )
 })
 
-test('sync: a missing source throws', () => {
+test('sync: a missing source throws a Node-shaped ENOENT', () => {
+  const missing = path.join(dir, 'absent.node')
   assert.throws(
-    () =>
-      decmpfs.copyDecmpfsFileSync(
-        path.join(dir, 'absent.node'),
-        path.join(dir, 'never.node'),
-      ),
-    /stat source/,
+    () => decmpfs.copyDecmpfsFileSync(missing, path.join(dir, 'never.node')),
+    (err: NodeJS.ErrnoException) => {
+      assert.equal(err.code, 'ENOENT')
+      assert.equal(err.errno, -2)
+      assert.equal(err.syscall, 'stat')
+      assert.equal(err.path, missing)
+      return true
+    },
   )
 })
 

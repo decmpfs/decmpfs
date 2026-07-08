@@ -123,14 +123,29 @@ jobs:
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || 'false' }}
           DIST_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.dist-tag || 'latest' }}
         run: |
+          set -euo pipefail
           ARGS="--access public --tag ${DIST_TAG:-latest}"
           if [ "$DRY_RUN" = "true" ]; then
             ARGS="$ARGS --dry-run"
           fi
-          # Platform packages first, then the main package that depends on
-          # them. Leading ./ is load-bearing: npm parses a bare `a/b` arg as
-          # a GitHub git spec, not a folder.
+          # Publish one package dir, idempotently: skip a version already on the
+          # registry so a re-run after a mid-list failure completes the remaining
+          # packages instead of 403-aborting on the first (mirrors the crate flow).
+          # The `npm view` doubles as the pre-publish registry-read receipt.
+          # Leading ./ is load-bearing: npm parses a bare `a/b` arg as a GitHub
+          # git spec, not a folder.
+          publish_one() {
+            dir="$1"
+            name="$(node -p "require('${dir}/package.json').name")"
+            version="$(node -p "require('${dir}/package.json').version")"
+            if [ "$DRY_RUN" != "true" ] && npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "skip: ${name}@${version} already published"
+              return 0
+            fi
+            npm publish "$dir" $ARGS
+          }
+          # Platform packages first, then the main package that depends on them.
           for dir in npm/*/; do
-            npm publish "./$dir" $ARGS
+            publish_one "./$dir"
           done
-          npm publish . $ARGS
+          publish_one .

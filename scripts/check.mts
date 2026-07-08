@@ -44,7 +44,11 @@ for (const { label, args } of FEATURE_SETS) {
     'warnings',
   ])
 }
-// Test the feature-gated code too — a green clippy doesn't run the tests.
+// Test the feature-gated code too — a green clippy doesn't run the tests, and a
+// default-feature `cargo test` never compiles the `addon` / `exe` modules, so
+// their unit tests (SHA-512 integrity + length math, self-replace) would
+// otherwise ship untested.
+run('cargo test (addon)', 'cargo', ['test', '--features', 'addon'])
 run('cargo test (exe)', 'cargo', ['test', '--features', 'exe'])
 run('version parity', process.execPath, [
   path.join(root, 'scripts', 'check-versions.mts'),

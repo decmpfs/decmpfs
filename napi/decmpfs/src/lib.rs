@@ -983,3 +983,29 @@ impl Task for CompressFileTask {
 pub fn compress_file(path: String) -> AsyncTask<CompressFileTask> {
   AsyncTask::new(CompressFileTask { path, err: None })
 }
+
+/// The FS-compression state of a path — returned by [`decmpfsStat`].
+#[napi(object)]
+pub struct DecmpfsStat {
+  /// Whether the file is stored OS-FS-compressed on disk.
+  pub compressed: bool,
+  /// Logical (apparent) size in bytes — constant regardless of compression.
+  pub logical: i64,
+  /// Physical (on-disk allocated) size in bytes — where the win shows.
+  pub physical: i64,
+}
+
+/// Inspect a path's FS-compression state (`{ compressed, logical, physical }`).
+/// Sync-only by design: it is a single metadata read, so — unlike the
+/// compress/copy/pack ops — there is no expensive work to offload to a task.
+#[napi]
+pub fn decmpfs_stat(env: Env, path: String) -> Result<DecmpfsStat> {
+  match decmpfs::stat(Path::new(&path)) {
+    Ok(s) => Ok(DecmpfsStat {
+      compressed: s.compressed,
+      logical: s.logical as i64,
+      physical: s.physical as i64,
+    }),
+    Err(e) => Err(throw_decmpfs(&env, &e, "stat", &path)),
+  }
+}

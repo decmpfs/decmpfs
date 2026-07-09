@@ -402,6 +402,58 @@ fn plain_write(path: &Path, content: &[u8]) -> Result<(), Error> {
   })
 }
 
+/// Filesystem-compression state of a path — one call that coalesces the
+/// otherwise-separate size + backend-signal reads (the compress/copy paths
+/// previously did a `stat` AND an `lstat`/attr read per file). Follows symlinks:
+/// compression is a property of the target file, never a symlink.
+pub struct Stat {
+  /// FS-compressed on disk. Uses the backend's authoritative signal where it has
+  /// one (`UF_COMPRESSED` on APFS, FIEMAP-encoded extents on btrfs, the
+  /// compressed attribute on NTFS); elsewhere inferred from allocated < logical.
+  pub compressed: bool,
+  /// Apparent (logical) size — constant whether or not the file is compressed.
+  pub logical: u64,
+  /// Allocated (physical) bytes on disk — where the compression win shows.
+  pub physical: u64,
+}
+
+/// Inspect the FS-compression state of `path` (see [`Stat`]).
+pub fn stat(path: &Path) -> Result<Stat, Error> {
+  stat_with(&Os, path)
+}
+
+/// [`stat`] over an injectable [`Backend`] so the no-signal (allocated-bytes)
+/// inference arm is testable without a real filesystem.
+fn stat_with<B: Backend>(backend: &B, path: &Path) -> Result<Stat, Error> {
+  let meta = std::fs::metadata(path).map_err(|source| Error::Io {
+    context: "stat",
+    source,
+  })?;
+  let logical = meta.len();
+  // One metadata read yields both size + allocation on unix (the coalesce);
+  // Windows needs GetCompressedFileSizeW for the post-compression allocation.
+  #[cfg(unix)]
+  let physical = {
+    use std::os::unix::fs::MetadataExt;
+    meta.blocks().saturating_mul(512)
+  };
+  #[cfg(not(unix))]
+  let physical = verify::on_disk_bytes(path)?;
+  // Prefer the backend's authoritative signal; fall back to the
+  // allocated-vs-logical inference when there is no signal (e.g. NTFS) OR the
+  // probe isn't supported on this filesystem (e.g. FIEMAP on tmpfs) — a stat is
+  // an inspection and must never fail over a best-effort compression check.
+  let compressed = match backend.compressed_on_disk(path) {
+    Ok(Some(signal)) => signal,
+    Ok(None) | Err(_) => logical > 0 && physical < logical,
+  };
+  Ok(Stat {
+    compressed,
+    logical,
+    physical,
+  })
+}
+
 #[cfg(feature = "addon")]
 pub mod addon;
 #[cfg(feature = "exe")]
@@ -769,6 +821,54 @@ mod tests {
       "cannot write a file over a directory, got {out:?}"
     );
     assert!(target.is_dir(), "the directory is left intact");
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn stat_reports_size_and_uncompressed_for_a_plain_file() {
+    let dir = scratch("stat-plain");
+    let path = dir.join("f");
+    std::fs::write(&path, vec![0u8; 4096]).unwrap();
+    let s = stat(&path).unwrap();
+    assert_eq!(s.logical, 4096, "logical == the written bytes");
+    assert!(s.physical > 0, "allocated bytes reported");
+    assert!(
+      !s.compressed,
+      "a freshly-written plain file is not FS-compressed"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn stat_reflects_a_compressed_file_where_supported() {
+    let dir = scratch("stat-comp");
+    let path = dir.join("addon.node");
+    let content = vec![0xABu8; 128 * 1024];
+    let outcome = compress_bytes(&path, &content, &Gate::any()).unwrap();
+    let s = stat(&path).unwrap();
+    assert_eq!(
+      s.logical,
+      content.len() as u64,
+      "logical == the written bytes"
+    );
+    assert_eq!(
+      std::fs::read(&path).unwrap(),
+      content,
+      "content round-trips"
+    );
+    // Where the FS actually compressed (APFS / btrfs / NTFS), stat must reflect
+    // it; on an unsupported FS the outcome isn't Compressed and we only assert
+    // the size + content invariants above.
+    if matches!(outcome, Outcome::Compressed { .. }) {
+      assert!(
+        s.compressed,
+        "a Compressed outcome → stat reports compressed"
+      );
+      assert!(
+        s.physical < s.logical,
+        "allocation shrank below the logical size"
+      );
+    }
     std::fs::remove_dir_all(&dir).ok();
   }
 

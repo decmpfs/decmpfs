@@ -152,6 +152,23 @@ export function compressFileSync(path: string): DecmpfsResult
 /** Async {@link compressFileSync}. */
 export function compressFile(path: string): Promise<DecmpfsResult>
 
+/** The FS-compression state of a path — returned by {@link decmpfsStat}. */
+export interface DecmpfsStat {
+  /** Whether the file is stored OS-FS-compressed on disk. */
+  compressed: boolean
+  /** Logical (apparent) size in bytes — constant regardless of compression. */
+  logical: number
+  /** Physical (on-disk allocated) size in bytes — where the win shows. */
+  physical: number
+}
+
+/**
+ * Inspect a path's FS-compression state. Sync-only by design: a single metadata
+ * read, so — unlike the compress/copy/pack ops — there is no expensive work to
+ * offload to a task.
+ */
+export function decmpfsStat(path: string): DecmpfsStat
+
 /** Pack `src` into a self-replacing executable at `dest` using `options.stub`. */
 export function packExecutableSync(
   src: string,

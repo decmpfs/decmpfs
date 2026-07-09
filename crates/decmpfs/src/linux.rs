@@ -177,6 +177,25 @@ pub(crate) fn apply_inplace(path: &Path, snapshot: &[u8]) -> Result<(), Error> {
   apply_bytes(path, snapshot, mode)
 }
 
+/// A collision-resistant sibling temp path for the atomic write. PID +
+/// wall-clock nanos + a process-local counter means two threads/processes
+/// compressing the SAME destination never derive the same temp name (a PID-only
+/// name with create+truncate would interleave their writes, or silently adopt a
+/// crashed run's stale temp). Paired with `create_new`, a collision is detected
+/// rather than truncated through. Mirrors the macOS backend's scheme.
+fn unique_tmp(dir: &Path, name: &str) -> std::path::PathBuf {
+  static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+  let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+  let nanos = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .map(|d| d.as_nanos())
+    .unwrap_or(0);
+  dir.join(format!(
+    ".{name}.decmpfs-{}-{nanos}-{seq}.tmp",
+    std::process::id()
+  ))
+}
+
 /// Write `content` to `path` as a fresh btrfs-compressed file in ONE pass: create
 /// the sibling temp, request the codec on the EMPTY file (so the bytes compress as
 /// they land — never a write-then-recompress), write, fsync, then atomic-rename
@@ -197,14 +216,13 @@ pub(crate) fn apply_bytes(
     || std::borrow::Cow::Borrowed("addon"),
     |n| n.to_string_lossy(),
   );
-  let tmp = dir.join(format!(".{name}.decmpfs-{}.tmp", std::process::id()));
+  let tmp = unique_tmp(dir, &name);
 
   let result = (|| {
     let mut file = std::fs::OpenOptions::new()
       .read(true)
       .write(true)
-      .create(true)
-      .truncate(true)
+      .create_new(true)
       .open(&tmp)
       .map_err(|source| Error::Io {
         context: "create temp",
@@ -268,4 +286,98 @@ pub(crate) fn clone_file(src: &Path, dest: &Path) -> Result<bool, Error> {
     let _ = std::fs::remove_file(dest);
   }
   Ok(cloned)
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+  use super::*;
+
+  fn scratch(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("decmpfs-linux-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+  }
+
+  // btrfs is required to exercise apply_bytes / is_already_compressed; ext4/tmpfs
+  // CI runners report Unsupported and the compression path is never reached.
+  fn on_btrfs(dir: &Path) -> bool {
+    let probe = dir.join(".btrfs-probe");
+    std::fs::write(&probe, b"x").unwrap();
+    let yes = matches!(detect(&probe), Ok(Support::Supported));
+    std::fs::remove_file(&probe).ok();
+    yes
+  }
+
+  #[test]
+  fn unique_tmp_never_collides_and_is_well_formed() {
+    let dir = Path::new("/tmp");
+    let a = unique_tmp(dir, "addon.node");
+    let b = unique_tmp(dir, "addon.node");
+    assert_ne!(a, b, "successive temps must differ (the seq counter)");
+    for p in [&a, &b] {
+      let f = p.file_name().unwrap().to_string_lossy();
+      assert!(
+        f.starts_with(".addon.node.decmpfs-"),
+        "unexpected temp name: {f}"
+      );
+      assert!(f.ends_with(".tmp"), "unexpected temp name: {f}");
+      assert_eq!(p.parent().unwrap(), dir);
+    }
+  }
+
+  #[test]
+  fn detect_is_ok_on_a_regular_temp_path() {
+    // btrfs → Supported, ext4/tmpfs → Unsupported; only a real I/O error Errs.
+    assert!(detect(&std::env::temp_dir()).is_ok());
+  }
+
+  #[test]
+  fn a_fresh_plain_file_is_not_already_compressed() {
+    let dir = scratch("iac");
+    let path = dir.join("f");
+    std::fs::write(&path, b"plain").unwrap();
+    assert!(!is_already_compressed(&path).unwrap_or(false));
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn clone_file_declines_a_missing_source() {
+    let dir = scratch("clone");
+    assert!(!clone_file(&dir.join("missing"), &dir.join("dest")).unwrap());
+    assert!(!dir.join("dest").exists(), "the empty dest is cleaned up");
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn apply_bytes_round_trips_and_concurrent_writers_converge_on_btrfs() {
+    let dir = scratch("rt");
+    if !on_btrfs(&dir) {
+      std::fs::remove_dir_all(&dir).ok();
+      return;
+    }
+    let content = vec![0xEEu8; 128 * 1024];
+    let dest = dir.join("addon.node");
+    // Eight writers racing on the SAME destination must all converge to identical
+    // bytes — the create_new + unique-temp scheme prevents interleaved writes.
+    std::thread::scope(|s| {
+      for _ in 0..8 {
+        let dest = dest.clone();
+        let content = content.clone();
+        s.spawn(move || {
+          let _ = apply_bytes(&dest, &content, None);
+        });
+      }
+    });
+    assert_eq!(
+      std::fs::read(&dest).unwrap(),
+      content,
+      "bytes survive the race"
+    );
+    assert!(
+      is_already_compressed(&dest).unwrap(),
+      "landed btrfs-compressed"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+  }
 }

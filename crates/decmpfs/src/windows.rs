@@ -21,7 +21,7 @@ use std::io::Write;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
-  CreateFileW, GetFileAttributesW, GetVolumeInformationByHandleW,
+  CreateFileW, GetFileAttributesW, GetVolumeInformationByHandleW, MoveFileExW,
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
@@ -32,6 +32,11 @@ const GENERIC_WRITE: u32 = 0x4000_0000;
 const FILE_SHARE_READ: u32 = 0x0000_0001;
 const OPEN_EXISTING: u32 = 3;
 const CREATE_ALWAYS: u32 = 2;
+const CREATE_NEW: u32 = 1;
+// MoveFileExW flags: replace an existing target atomically, and don't return
+// until the rename is flushed to disk.
+const MOVEFILE_REPLACE_EXISTING: u32 = 0x0000_0001;
+const MOVEFILE_WRITE_THROUGH: u32 = 0x0000_0008;
 const FSCTL_SET_COMPRESSION: u32 = 0x0009_C040;
 const COMPRESSION_FORMAT_DEFAULT: u16 = 1; // LZNT1
 const FILE_FILE_COMPRESSION: u32 = 0x0000_0010; // volume supports per-file compression
@@ -148,30 +153,90 @@ pub(crate) fn apply_inplace(path: &Path, _snapshot: &[u8]) -> Result<(), Error> 
   set_compression(handle.0)
 }
 
-/// Write `content` to `path` as a fresh NTFS-compressed file in ONE pass: create
-/// the file, FSCTL_SET_COMPRESSION on the EMPTY handle (so writes compress on the
-/// way in — never a write-then-recompress), then write the bytes through the same
-/// handle. `mode` is unused on Windows (no POSIX bits). Shared by `compress_bytes`.
+/// A collision-resistant sibling temp path. PID + wall-clock nanos + a
+/// process-local counter so two writers on the SAME destination never share a
+/// temp; paired with CREATE_NEW a collision errors rather than clobbering.
+/// Mirrors the macOS/Linux backends' scheme.
+fn unique_tmp(dir: &Path, name: &str) -> std::path::PathBuf {
+  static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+  let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+  let nanos = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .map(|d| d.as_nanos())
+    .unwrap_or(0);
+  dir.join(format!(
+    ".{name}.decmpfs-{}-{nanos}-{seq}.tmp",
+    std::process::id()
+  ))
+}
+
+/// Atomically publish `tmp` over `dest` (replace + write-through).
+fn move_file_replace(tmp: &Path, dest: &Path) -> Result<(), Error> {
+  let wtmp = wide(tmp);
+  let wdest = wide(dest);
+  let ok = unsafe {
+    MoveFileExW(
+      wtmp.as_ptr(),
+      wdest.as_ptr(),
+      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+    )
+  };
+  if ok == 0 {
+    return Err(io("MoveFileExW"));
+  }
+  Ok(())
+}
+
+/// Write `content` to `path` as a fresh NTFS-compressed file in ONE pass, then
+/// publish it atomically: create a sibling temp with CREATE_NEW,
+/// FSCTL_SET_COMPRESSION on the EMPTY handle (so writes compress on the way in —
+/// never a write-then-recompress), write + flush, then MoveFileEx over `path`.
+/// The temp+rename matches the macOS/Linux backends and fixes the old
+/// CREATE_ALWAYS-in-place write, which truncated `path` before streaming — a
+/// crash or a concurrent open saw a partial `.node`. `mode` is unused on Windows
+/// (no POSIX bits). Shared by `compress_bytes`.
 pub(crate) fn apply_bytes(
   path: &Path,
   content: &[u8],
   _mode: Option<std::fs::Permissions>,
 ) -> Result<(), Error> {
-  let handle = open_with(path, GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
-  set_compression(handle.0)?;
-  // Write through the same handle the compression flag was set on, so every block
-  // lands compressed. WriteFile via a std File would need a second open; instead
-  // borrow the raw handle into a File for the write, then forget it so Drop on the
-  // Handle (not the File) does the single CloseHandle.
-  use std::os::windows::io::FromRawHandle;
-  let mut file = unsafe { std::fs::File::from_raw_handle(handle.0 as _) };
-  let res = file.write_all(content).and_then(|()| file.flush());
-  // Don't let File's Drop close the handle — the Handle wrapper owns it.
-  std::mem::forget(file);
-  res.map_err(|source| Error::Io {
-    context: "write",
-    source,
-  })
+  let dir = path.parent().ok_or_else(|| io("no parent dir"))?;
+  let name = path.file_name().map_or_else(
+    || std::borrow::Cow::Borrowed("addon"),
+    |n| n.to_string_lossy(),
+  );
+  let tmp = unique_tmp(dir, &name);
+
+  let result = (|| {
+    let handle = open_with(&tmp, GENERIC_READ | GENERIC_WRITE, CREATE_NEW)?;
+    set_compression(handle.0)?;
+    // Borrow the raw handle into a File for the write, then forget it so the
+    // Handle wrapper (not File) does the single CloseHandle.
+    use std::os::windows::io::FromRawHandle;
+    let mut file = unsafe { std::fs::File::from_raw_handle(handle.0 as _) };
+    let res = file
+      .write_all(content)
+      .and_then(|()| file.flush())
+      .and_then(|()| file.sync_all());
+    std::mem::forget(file);
+    res.map_err(|source| Error::Io {
+      context: "write temp",
+      source,
+    })
+  })();
+
+  match result {
+    Ok(()) => move_file_replace(&tmp, path).map_err(|err| {
+      // A failed publish (e.g. the dest is loaded → SHARING_VIOLATION) leaves the
+      // original file untouched; drop the orphan temp.
+      let _ = std::fs::remove_file(&tmp);
+      err
+    }),
+    Err(err) => {
+      let _ = std::fs::remove_file(&tmp);
+      Err(err)
+    }
+  }
 }
 
 /// No FS-specific on-disk signal — apply_guarded falls back to the generic
@@ -186,4 +251,90 @@ pub(crate) fn compressed_on_disk(_path: &Path) -> Result<Option<bool>, Error> {
 /// re-applies `FSCTL_SET_COMPRESSION` at the destination.
 pub(crate) fn clone_file(_src: &Path, _dest: &Path) -> Result<bool, Error> {
   Ok(false)
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+  use super::*;
+
+  fn scratch(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("decmpfs-win-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+  }
+
+  fn on_ntfs(dir: &Path) -> bool {
+    let probe = dir.join(".ntfs-probe");
+    std::fs::write(&probe, b"x").unwrap();
+    let yes = matches!(detect(&probe), Ok(Support::Supported));
+    std::fs::remove_file(&probe).ok();
+    yes
+  }
+
+  #[test]
+  fn unique_tmp_never_collides_and_is_well_formed() {
+    let dir = std::env::temp_dir();
+    let a = unique_tmp(&dir, "addon.node");
+    let b = unique_tmp(&dir, "addon.node");
+    assert_ne!(a, b, "successive temps must differ (the seq counter)");
+    for p in [&a, &b] {
+      let f = p.file_name().unwrap().to_string_lossy();
+      assert!(
+        f.starts_with(".addon.node.decmpfs-"),
+        "unexpected temp name: {f}"
+      );
+      assert!(f.ends_with(".tmp"), "unexpected temp name: {f}");
+    }
+  }
+
+  #[test]
+  fn clone_file_always_declines_on_ntfs() {
+    let dir = scratch("clone");
+    assert!(!clone_file(&dir.join("a"), &dir.join("b")).unwrap());
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn detect_is_ok_and_a_fresh_file_is_not_compressed() {
+    let dir = scratch("detect");
+    let path = dir.join("f.bin");
+    std::fs::write(&path, b"MZ plain").unwrap();
+    assert!(detect(&path).is_ok());
+    assert!(!is_already_compressed(&path).unwrap());
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn apply_bytes_round_trips_atomically_and_races_converge_on_ntfs() {
+    let dir = scratch("rt");
+    if !on_ntfs(&dir) {
+      std::fs::remove_dir_all(&dir).ok();
+      return;
+    }
+    let content = vec![0xCDu8; 128 * 1024];
+    let dest = dir.join("addon.node");
+    // Eight writers racing on the SAME dest must all converge to identical
+    // bytes — the CREATE_NEW unique-temp + MoveFileEx replace prevents the
+    // partial/interleaved write the old CREATE_ALWAYS-in-place path allowed.
+    std::thread::scope(|s| {
+      for _ in 0..8 {
+        let dest = dest.clone();
+        let content = content.clone();
+        s.spawn(move || {
+          let _ = apply_bytes(&dest, &content, None);
+        });
+      }
+    });
+    assert_eq!(
+      std::fs::read(&dest).unwrap(),
+      content,
+      "bytes survive the race"
+    );
+    assert!(
+      is_already_compressed(&dest).unwrap(),
+      "landed NTFS-compressed"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+  }
 }

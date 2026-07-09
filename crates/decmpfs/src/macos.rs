@@ -326,6 +326,16 @@ pub(crate) fn apply_bytes(
   if let Some(perm) = mode {
     let _ = std::fs::set_permissions(&tmp, perm);
   }
+  // Preserve ownership across the rewrite. Running as root (a global npm install,
+  // a Docker build) the temp is created owned by the current euid, so the rename
+  // would otherwise change the file's owner. Match the original's uid/gid.
+  // Best-effort: a no-op for a new path (nothing to preserve) and for a non-root
+  // process (chown to another owner is EPERM — but then the file was already
+  // ours, so nothing changes).
+  if let Ok(meta) = std::fs::metadata(path) {
+    use std::os::unix::fs::MetadataExt;
+    let _ = std::os::unix::fs::chown(&tmp, Some(meta.uid()), Some(meta.gid()));
+  }
   std::fs::rename(&tmp, path).map_err(|source| {
     let _ = std::fs::remove_file(&tmp);
     Error::Io {
@@ -578,6 +588,29 @@ mod tests {
         "verbatim blocks read back"
       );
     }
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn apply_bytes_preserves_ownership_of_an_overwritten_file() {
+    // Non-root exercises the chown path over an existing file — owner is our own
+    // uid, so preservation is a no-op we assert stays stable + non-corrupting.
+    // The root path (a file owned by a different uid) is verified in CI.
+    let dir = std::env::temp_dir().join(format!("decmpfs-own-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("f");
+    std::fs::write(&path, vec![0u8; 4096]).unwrap();
+    if !matches!(detect(&path), Ok(Support::Supported)) {
+      std::fs::remove_dir_all(&dir).ok();
+      return;
+    }
+    use std::os::unix::fs::MetadataExt;
+    let before_uid = std::fs::metadata(&path).unwrap().uid();
+    let content = vec![0xABu8; 8192];
+    apply_bytes(&path, &content, None).unwrap();
+    let meta = std::fs::metadata(&path).unwrap();
+    assert_eq!(meta.uid(), before_uid, "owner preserved across the rewrite");
+    assert_eq!(std::fs::read(&path).unwrap(), content, "content intact");
     std::fs::remove_dir_all(&dir).ok();
   }
 }

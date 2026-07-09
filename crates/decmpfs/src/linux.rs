@@ -246,6 +246,15 @@ pub(crate) fn apply_bytes(
     if let Some(perm) = mode {
       let _ = std::fs::set_permissions(&tmp, perm);
     }
+    // Preserve ownership across the rewrite. As root (a global npm install, a
+    // Docker build) the temp is owned by the current euid, so the rename would
+    // otherwise change the file's owner. Match the original's uid/gid.
+    // Best-effort: a no-op for a new path and for a non-root process (chown to
+    // another owner is EPERM — but then the file was already ours).
+    if let Ok(meta) = std::fs::metadata(path) {
+      use std::os::unix::fs::MetadataExt;
+      let _ = std::os::unix::fs::chown(&tmp, Some(meta.uid()), Some(meta.gid()));
+    }
   }
 
   match result {

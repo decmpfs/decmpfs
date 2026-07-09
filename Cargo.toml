@@ -1,3 +1,15 @@
 [workspace]
 members = ["crates/*", "napi/*"]
 resolver = "2"
+
+# Release tuning for the shipped artifacts (the decmpfs.node cdylib + the
+# decmpfs-stub exe both inherit this). Fat LTO + a single codegen unit let the
+# codec/integrity glue inline into the addon; strip drops symbols a dlopen'd
+# .node never needs. Panic stays the default `unwind` — napi-rs wraps every
+# binding in `catch_unwind` to turn a Rust panic into a thrown JS error, so
+# `abort` would turn a recoverable panic into a hard process crash.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"

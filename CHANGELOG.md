@@ -9,6 +9,8 @@
   transparently.
 - macOS: LZVN block compression runs in parallel across cores — large addons
   compress several times faster on write.
+- Smaller shipped addon: fat LTO + a single codegen unit + symbol stripping and
+  per-platform CPU baselines (x86-64-v2, apple-m1) trim the `.node` ~20%.
 - Node bindings surface `fs`-shaped errors (Node `code` / `errno` / `syscall`)
   across `write` / `copy` / `copyFile` / `rm`.
 - Windows: `detect()` handles directories (opens with `FILE_FLAG_BACKUP_SEMANTICS`).

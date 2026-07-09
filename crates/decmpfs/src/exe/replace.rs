@@ -65,6 +65,45 @@ fn resolve_exe_and_dir() -> Result<(std::path::PathBuf, std::path::PathBuf), Err
   Ok((exe, dir))
 }
 
+/// Best-effort exclusive advisory lock over a stub's self-replace. Concurrent
+/// first-loads of the SAME packed binary (a burst of parallel launches right
+/// after install) would otherwise EACH run the expensive
+/// decode+re-sign+FS-compress+rename; the lock lets one win while the rest wait,
+/// then observe the completed swap and exec the real binary. Held for the
+/// guard's lifetime: std's file-lock fd is `O_CLOEXEC`, so the lock releases at
+/// `execve` (the re-exec'd real binary must not inherit it) and on any early
+/// `return` (the guard drops → the `File` closes). A lock we can't create or
+/// acquire (a read-only dir, an FS without advisory locks) yields an UNLOCKED
+/// guard — the swap stays correct via the atomic rename, only the dedup is lost.
+///
+/// Unix-only: Windows defers the swap to a `.decmpfs-pending` sibling and spawns
+/// it (never overwrites the running image), so its launches are independent and
+/// the per-write atomicity already covers concurrency — a lock there would
+/// wrongly serialize concurrent launches.
+#[cfg(unix)]
+struct SelfReplaceLock {
+  // Kept alive to hold the OS lock; dropped (closed → unlocked) at scope end.
+  _file: Option<std::fs::File>,
+}
+
+#[cfg(unix)]
+impl SelfReplaceLock {
+  fn acquire(dir: &std::path::Path, file_name: &str) -> Self {
+    let path = dir.join(format!(".{file_name}.decmpfs.lock"));
+    let file = std::fs::OpenOptions::new()
+      .create(true)
+      .write(true)
+      .open(&path)
+      .ok();
+    if let Some(f) = file.as_ref() {
+      // Blocking exclusive lock; an Err leaves the guard effectively unlocked
+      // (we fall through — the atomic rename still guarantees correctness).
+      let _ = f.lock();
+    }
+    Self { _file: file }
+  }
+}
+
 /// Materialize + swap + exec. Does not return on success (process image
 /// replaced). `Ok(false)` means "this binary is not a packed stub, run your
 /// normal main"; `Err` is a genuine I/O / integrity failure.
@@ -72,10 +111,10 @@ fn resolve_exe_and_dir() -> Result<(std::path::PathBuf, std::path::PathBuf), Err
 pub(crate) fn materialize_and_exec(argv: &[String]) -> Result<bool, Error> {
   use std::os::unix::process::CommandExt;
 
-  let Some(section) = read_self_payload()? else {
+  // Cheap pre-check: a plain executable (no payload) runs its normal main.
+  if read_self_payload()?.is_none() {
     return Ok(false);
-  };
-  let raw = decode_verified(&section)?;
+  }
   let (exe, dir) = resolve_exe_and_dir()?;
   let file_name = exe
     .file_name()
@@ -85,6 +124,24 @@ pub(crate) fn materialize_and_exec(argv: &[String]) -> Result<bool, Error> {
     })?
     .to_string_lossy()
     .into_owned();
+
+  // Serialize concurrent first-loads of this stub (see SelfReplaceLock). Released
+  // at execve (O_CLOEXEC) or when this guard drops on an early return.
+  let _lock = SelfReplaceLock::acquire(&dir, &file_name);
+
+  // Re-read UNDER the lock: a process that went before us may have already
+  // swapped the on-disk exe, so its payload section is gone. If so, skip the
+  // whole materialize and exec the already-real binary directly.
+  let Some(section) = read_self_payload()? else {
+    let source = std::process::Command::new(&exe)
+      .args(argv.get(1..).unwrap_or(&[]))
+      .exec();
+    return Err(Error::Io {
+      context: "exec the already-materialized binary",
+      source,
+    });
+  };
+  let raw = decode_verified(&section)?;
   let temp = dir.join(format!(
     ".{file_name}.decmpfs-materializing-{}",
     std::process::id()
@@ -212,5 +269,49 @@ mod tests {
     // The cargo test binary is a plain executable, not a packed stub, so it
     // carries no `SMOL/__DECMPFS` section or EOF footer.
     assert!(read_self_payload().expect("reads current_exe").is_none());
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn self_replace_lock_is_exclusive_and_releases_on_drop() {
+    let dir = std::env::temp_dir().join(format!("decmpfs-srlock-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let name = "toolstub";
+    let lock_path = dir.join(format!(".{name}.decmpfs.lock"));
+    {
+      let _guard = SelfReplaceLock::acquire(&dir, name);
+      // A distinct handle on the same lock file can't take it while the guard
+      // holds the exclusive lock (flock conflicts across open descriptions).
+      let other = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&lock_path)
+        .unwrap();
+      assert!(
+        other.try_lock().is_err(),
+        "lock is held exclusively while the guard is alive"
+      );
+    }
+    // The guard dropped → the File closed → the lock is free again.
+    let other = std::fs::OpenOptions::new()
+      .create(true)
+      .write(true)
+      .open(&lock_path)
+      .unwrap();
+    assert!(
+      other.try_lock().is_ok(),
+      "lock released when the guard drops"
+    );
+    other.unlock().ok();
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn self_replace_lock_falls_through_when_the_dir_is_unwritable() {
+    // A lock file we can't create yields an unlocked guard, no panic — the swap
+    // still works via the atomic rename, just without the dedup.
+    let guard = SelfReplaceLock::acquire(std::path::Path::new("/no/such/decmpfs/dir"), "x");
+    drop(guard);
   }
 }

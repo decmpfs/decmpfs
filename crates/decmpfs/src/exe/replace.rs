@@ -92,6 +92,7 @@ impl SelfReplaceLock {
     let path = dir.join(format!(".{file_name}.decmpfs.lock"));
     let file = std::fs::OpenOptions::new()
       .create(true)
+      .truncate(false)
       .write(true)
       .open(&path)
       .ok();
@@ -284,6 +285,7 @@ mod tests {
       // holds the exclusive lock (flock conflicts across open descriptions).
       let other = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(false)
         .write(true)
         .open(&lock_path)
         .unwrap();
@@ -295,6 +297,7 @@ mod tests {
     // The guard dropped → the File closed → the lock is free again.
     let other = std::fs::OpenOptions::new()
       .create(true)
+      .truncate(false)
       .write(true)
       .open(&lock_path)
       .unwrap();

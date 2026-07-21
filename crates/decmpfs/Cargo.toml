@@ -57,3 +57,8 @@ windows-sys = { version = "=0.59.0", features = [
 # Backend seam so copy/compress branches test without touching disk.
 mockall = "=0.15.0"
 tempfile = "=3.27.0"
+# Property-based tests (Tier 1) for the untrusted-input parsers — the addon
+# pressed-data decoder round-trip + the gate size/glob parsers. Explicit
+# `Strategy` objects (better shrinking than quickcheck), pinned exact to match the
+# crate's dependency policy.
+proptest = "=1.11.0"

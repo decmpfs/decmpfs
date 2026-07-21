@@ -23,3 +23,22 @@ pe_section=".PRESSED"
 
 # --- zstd frame magic (the payload the decoder inflates) ---
 zstd_magic="\x28\xb5\x2f\xfd"
+
+# --- gate size-predicate tokens (gate_parse) ---
+gate_op_gt=">"
+gate_op_ge=">="
+gate_unit_kb="KB"
+gate_unit_mb="MB"
+gate_unit_gb="GB"
+gate_unit_kib="KiB"
+gate_unit_mib="MiB"
+gate_unit_gib="GiB"
+
+# --- gate glob metacharacters + path fragments (gate_glob) ---
+glob_star="*"
+glob_globstar="**"
+glob_question="?"
+glob_sep="/"
+node_ext=".node"
+node_modules="node_modules/"
+build_release="build/Release/"

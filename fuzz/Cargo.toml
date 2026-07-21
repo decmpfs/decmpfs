@@ -55,3 +55,17 @@ path = "fuzz_targets/unwrap_if_hybrid.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "gate_parse"
+path = "fuzz_targets/gate_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gate_glob"
+path = "fuzz_targets/gate_glob.rs"
+test = false
+doc = false
+bench = false

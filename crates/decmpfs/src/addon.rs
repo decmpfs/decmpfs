@@ -246,7 +246,55 @@ fn cstr_at(strtab: &[u8], off: usize) -> Option<&[u8]> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+  use proptest::prelude::*;
+
   use super::*;
+
+  proptest! {
+    // Tier 1 round-trip: any raw addon, wrapped into a well-formed pressed-data
+    // section, decodes back to the exact original bytes (header parse + zstd inflate
+    // + SHA-512 gate is the identity over a validly-framed blob).
+    #[test]
+    fn decode_round_trips_arbitrary_payload(
+      raw in prop::collection::vec(any::<u8>(), 1..8192),
+      has_config in any::<bool>(),
+    ) {
+      let section = synth_section(&raw, has_config);
+      let decoded = decode_pressed_data(&section);
+      prop_assert_eq!(decoded.as_deref(), Some(raw.as_slice()));
+    }
+
+    // The decoder never panics on arbitrary bytes — the offset arithmetic, size
+    // guards, and zstd frame decode must fail closed to a graceful `None`.
+    #[test]
+    fn decode_never_panics(data in prop::collection::vec(any::<u8>(), 0..4096)) {
+      let _ = decode_pressed_data(&data);
+    }
+
+    // The container walk + decode never panics on arbitrary bytes.
+    #[test]
+    fn unwrap_never_panics(data in prop::collection::vec(any::<u8>(), 0..4096)) {
+      let _ = unwrap_if_hybrid(&data);
+    }
+
+    // Tamper-evidence: a single flipped byte anywhere in a valid section either still
+    // decodes to the EXACT original (the flip landed in an ignored field — cache key
+    // / platform metadata) or is rejected with `None`. It can NEVER yield different
+    // bytes — the SHA-512 gate makes a silently-wrong decode impossible.
+    #[test]
+    fn tampering_never_yields_wrong_bytes(
+      raw in prop::collection::vec(any::<u8>(), 1..2048),
+      idx in any::<prop::sample::Index>(),
+      xor in 1u8..=255,
+    ) {
+      let mut section = synth_section(&raw, false);
+      let i = idx.index(section.len());
+      section[i] ^= xor;
+      if let Some(out) = decode_pressed_data(&section) {
+        prop_assert_eq!(out, raw);
+      }
+    }
+  }
 
   /// Build a valid pressed-data section blob from `raw` (the addon) so the header
   /// parse + zstd decode + SHA-512 check round-trip without a real binary.

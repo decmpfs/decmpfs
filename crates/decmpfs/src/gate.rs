@@ -260,7 +260,79 @@ fn glob_inner(pat: &[u8], text: &[u8]) -> bool {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+  use proptest::prelude::*;
+
   use super::*;
+
+  proptest! {
+    // Tier 1 — the size-predicate parser never panics on ANY string. `spec` is a
+    // manifest-supplied value (`compress = ">= 1MB"`), so arbitrary text reaches it;
+    // a graceful `Err(GateParseError)` is the only non-`Ok` outcome.
+    #[test]
+    fn size_predicate_parse_never_panics(s in ".*") {
+      let _ = SizePredicate::parse(&s);
+    }
+
+    // Round-trip: a bare-number spec parses back to the exact threshold under both
+    // operators (formatting the struct's value then reparsing is the identity).
+    #[test]
+    fn bare_number_spec_round_trips(n in any::<u64>()) {
+      prop_assert_eq!(
+        SizePredicate::parse(&format!(">{n}")),
+        Ok(SizePredicate::GreaterThan(n))
+      );
+      prop_assert_eq!(
+        SizePredicate::parse(&format!(">= {n}")),
+        Ok(SizePredicate::AtLeast(n))
+      );
+    }
+
+    // Oracle: a decimal-unit literal equals `number * 1000^k` whenever it can't
+    // overflow (bounded so the product stays inside u64).
+    #[test]
+    fn decimal_unit_scales_like_the_oracle(n in 0u64..=1_000_000) {
+      prop_assert_eq!(parse_size(&format!("{n}KB")), Ok(n * 1_000));
+      prop_assert_eq!(parse_size(&format!("{n}MB")), Ok(n * 1_000_000));
+      prop_assert_eq!(parse_size(&format!("{n}kib")), Ok(n * 1024));
+    }
+
+    // `Gate::matches` never panics on an untrusted path text of any bytes/length —
+    // the path segment can carry a downloaded package's name.
+    #[test]
+    fn gate_matches_never_panics(text in ".*", len in any::<u64>()) {
+      let _ = Gate::default().matches(&text, len);
+      let _ = Gate::any().matches(&text, len);
+    }
+
+    // Oracle: a metachar-free pattern is a plain literal — it matches iff the text
+    // is byte-identical.
+    #[test]
+    fn literal_glob_matches_iff_equal(
+      lit in "[a-zA-Z0-9._-]{0,32}",
+      text in "[a-zA-Z0-9._-]{0,32}",
+    ) {
+      prop_assert_eq!(glob_match(&lit, &text), lit == text);
+    }
+
+    // `**` is the match-everything pattern: it accepts any path text, including one
+    // that spans separators.
+    #[test]
+    fn double_star_matches_any_path(text in ".*") {
+      prop_assert!(glob_match("**", &text));
+    }
+
+    // The matcher terminates and never panics on arbitrary pattern AND text. The
+    // pattern alphabet is bounded (few metachars, short) so this Tier-1 property
+    // can't wander into the algorithmic-complexity search that Tier 2 (the
+    // `gate_glob` fuzz target) owns.
+    #[test]
+    fn glob_match_never_panics(
+      pattern in "[a-z/.?*]{0,12}",
+      text in "[a-z/.]{0,24}",
+    ) {
+      let _ = glob_match(&pattern, &text);
+    }
+  }
 
   #[test]
   fn parses_units_case_insensitively() {

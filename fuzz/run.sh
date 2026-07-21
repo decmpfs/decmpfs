@@ -18,7 +18,7 @@ set -euo pipefail
 FUZZ_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DICT="$FUZZ_DIR/fuzz.dict"
 DURATION="${2:-600}"
-TARGETS=(decode_pressed_data unwrap_if_hybrid)
+TARGETS=(decode_pressed_data unwrap_if_hybrid gate_parse gate_glob)
 
 # Per-target libFuzzer flags, calibrated for the ASan + coverage instrumentation
 # cargo-fuzz builds with:
@@ -33,6 +33,10 @@ target_flags() {
   case "$1" in
     decode_pressed_data) echo "-timeout=10 -rss_limit_mb=2048 -max_len=65536" ;;
     unwrap_if_hybrid)    echo "-timeout=10 -rss_limit_mb=2048 -max_len=65536" ;;
+    # The gate parsers are tiny, pure, and allocation-free: a short input bound and
+    # the default RSS are plenty; `-timeout=10` still catches a genuine hang.
+    gate_parse)          echo "-timeout=10 -rss_limit_mb=2048 -max_len=256" ;;
+    gate_glob)           echo "-timeout=10 -rss_limit_mb=2048 -max_len=4096" ;;
     *) echo "unknown target: $1" >&2; return 1 ;;
   esac
 }
@@ -63,9 +67,9 @@ run_one() {
 case "${1:-all}" in
   all)
     for t in "${TARGETS[@]}"; do run_one "$t"; done ;;
-  decode_pressed_data|unwrap_if_hybrid)
+  decode_pressed_data|unwrap_if_hybrid|gate_parse|gate_glob)
     run_one "$1" ;;
   *)
-    echo "usage: $0 <decode_pressed_data|unwrap_if_hybrid|all> [seconds]" >&2
+    echo "usage: $0 <decode_pressed_data|unwrap_if_hybrid|gate_parse|gate_glob|all> [seconds]" >&2
     exit 2 ;;
 esac

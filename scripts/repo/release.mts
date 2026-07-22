@@ -29,6 +29,7 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { getDefaultLogger } from '@socketsecurity/lib-stable/logger/default'
 import { spawnSync } from '@socketsecurity/lib-stable/process/spawn/child'
+import { resolveRelease } from './release-lib.mts'
 
 const logger = getDefaultLogger()
 
@@ -38,25 +39,6 @@ const arg = (argv[0] ?? '').replace(/^v/, '')
 const push = process.argv.includes('--push')
 const dryRun = process.argv.includes('--dry-run')
 
-// Resolve the version to release from the committed version and an optional arg:
-//   - a `-prerelease` (or any `-suffix`) committed version + no arg → FINALIZE
-//     to the plain semver (0.1.1-prerelease → 0.1.1), reusing the CHANGELOG
-//     section already written for it (kept verbatim, never re-stubbed);
-//   - a new semver arg → BUMP (insert a CHANGELOG stub to fill in);
-//   - otherwise release WHAT IS COMMITTED.
-function resolveRelease(current: string, argVersion: string): {
-  version: string
-  mode: 'finalize' | 'bump' | 'as-committed'
-} {
-  const pre = current.match(/^(?<base>\d+\.\d+\.\d+)-[0-9A-Za-z.-]+$/)
-  if (pre && !argVersion) {
-    return { version: pre.groups!['base']!, mode: 'finalize' }
-  }
-  if (argVersion && argVersion !== current) {
-    return { version: argVersion, mode: 'bump' }
-  }
-  return { version: current, mode: 'as-committed' }
-}
 
 function die(msg: string): never {
   process.stderr.write(`release: ${msg}\n`)
@@ -249,6 +231,21 @@ if (bump) {
 // a published tag must never move (immutable release), so pushing below is
 // non-forced and will reject a moved-after-publish tag loudly.
 const tag = `v${version}`
+// verify-before-acting: a tag whose GitHub Release was already cut is immutable
+// — refuse to move it. A tag with no Release (e.g. a failed release run) is safe
+// to re-fire.
+if (push) {
+  const released = spawnSync('gh', ['release', 'view', tag, '--json', 'tagName'], {
+    cwd: root,
+    encoding: 'utf8',
+  })
+  if (released.status === 0) {
+    die(
+      `GitHub Release ${tag} already exists and is immutable — bump the version ` +
+        `instead of moving ${tag}.`,
+    )
+  }
+}
 git(['tag', '-f', tag], { stdio: 'inherit' })
 
 if (push) {

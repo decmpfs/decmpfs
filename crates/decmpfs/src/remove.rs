@@ -146,6 +146,11 @@ impl RmFs for OsRmFs {
   fn remove_tree(&self, path: &Path) -> std::io::Result<()> {
     std::fs::remove_dir_all(path)
   }
+  // Real Io seam: the safe-delete guard needs the process cwd to refuse deleting
+  // it or its ancestors (socket-lib safeDelete model). The seam is mocked in
+  // tests, so this is the one production read of the cwd. A fleet cascade added
+  // std::env::current_dir to clippy's disallowed_methods.
+  #[allow(clippy::disallowed_methods)]
   fn cwd(&self) -> std::io::Result<std::path::PathBuf> {
     std::env::current_dir()
   }
@@ -380,6 +385,8 @@ mod tests {
   }
 
   #[test]
+  // The test must read the real cwd to prove the guard refuses deleting it.
+  #[allow(clippy::disallowed_methods)]
   fn rm_refuses_cwd_without_force_but_force_overrides_the_guard() {
     // Removing the real cwd is blocked by the guard (this does NOT delete it).
     let cwd = std::env::current_dir().unwrap();

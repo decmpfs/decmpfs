@@ -32,10 +32,14 @@ jobs:
     env:
       SOCKET_API_KEY: ${{ secrets.SOCKET_API_TOKEN_FOR_CLI_AND_SFW }}
     steps:
-      # Checkout first — the setup-and-install below is a LOCAL action and can't
-      # be loaded until the repo is on disk.
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v7.0.0 (2026-06-29)
+      # Bootstrap checkout ONLY to put ./.github/actions/* on disk so the local
+      # setup-and-install composite resolves. persist-credentials: false is
+      # required — setup-and-install does its own git auth, and a token persisted
+      # here conflicts with it and 400s the fetch.
+      - name: Checkout (bootstrap)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 (2026-05-15)
+        with:
+          persist-credentials: false
       - name: Setup + install
         uses: ./.github/actions/fleet/setup-and-install
       - name: Rust toolchain

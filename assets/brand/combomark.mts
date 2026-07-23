@@ -46,36 +46,17 @@ if (paths.length !== 8) {
 const markPaths = paths.slice(0, 6)
 const fsPaths = paths.slice(6)
 
-/** Y coordinates of a path list (numbers are `x y x y …`, so every 2nd one). */
-export function yValues(ps: string[]): number[] {
-  return ps.flatMap(p =>
-    (p.match(/-?\d*\.?\d+/g) ?? []).map(Number).filter((_, i) => i % 2 === 1),
+export type Mode = 'adaptive' | 'light' | 'dark'
+
+// build/tagline reference DEFS/BODY and the palette consts defined below —
+// declaration-hoisted, and only invoked by the write loop at the bottom of the
+// script, long after every const is initialized.
+export function build(mode: Mode): string {
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${VIEWBOX} ${VIEWBOX}" role="img" aria-label="decmpfs by socket labs">\n` +
+    `${DEFS}\n${BODY}\n${tagline(mode)}\n</svg>\n`
   )
 }
-const allY = yValues(paths)
-const fsY = yValues(fsPaths)
-const [y0, y1] = [Math.min(...allY), Math.max(...allY)]
-const [fy0, fy1] = [Math.min(...fsY), Math.max(...fsY)]
-
-const DEFS = `  <defs>
-    <!-- brand orange, anchored on #f15a24 -->
-    <linearGradient id="orange" gradientUnits="userSpaceOnUse" x1="0" y1="${y0.toFixed(0)}" x2="0" y2="${y1.toFixed(0)}">
-      <stop offset="0" stop-color="#FF854A"/><stop offset="0.5" stop-color="#F15A24"/><stop offset="1" stop-color="#D8431A"/>
-    </linearGradient>
-    <!-- controlled brick-red fs accent -->
-    <linearGradient id="red" gradientUnits="userSpaceOnUse" x1="0" y1="${fy0.toFixed(0)}" x2="0" y2="${fy1.toFixed(0)}">
-      <stop offset="0" stop-color="#EF4A1C"/><stop offset="1" stop-color="#C42711"/>
-    </linearGradient>
-  </defs>`
-
-const BODY = `  <g fill="url(#orange)">
-${markPaths.map(p => `    ${p}`).join('\n')}
-  </g>
-  <g fill="url(#red)">
-${fsPaths.map(p => `    ${p}`).join('\n')}
-  </g>`
-
-export type Mode = 'adaptive' | 'light' | 'dark'
 
 export function tagline(mode: Mode): string {
   let style = ''
@@ -104,12 +85,36 @@ export function tagline(mode: Mode): string {
   )
 }
 
-export function build(mode: Mode): string {
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${VIEWBOX} ${VIEWBOX}" role="img" aria-label="decmpfs by socket labs">\n` +
-    `${DEFS}\n${BODY}\n${tagline(mode)}\n</svg>\n`
+/**
+ * Y coordinates of a path list (numbers are `x y x y …`, so every 2nd one).
+ */
+export function yValues(ps: string[]): number[] {
+  return ps.flatMap(p =>
+    (p.match(/-?\d*\.?\d+/g) ?? []).map(Number).filter((_, i) => i % 2 === 1),
   )
 }
+const allY = yValues(paths)
+const fsY = yValues(fsPaths)
+const [y0, y1] = [Math.min(...allY), Math.max(...allY)]
+const [fy0, fy1] = [Math.min(...fsY), Math.max(...fsY)]
+
+const DEFS = `  <defs>
+    <!-- brand orange, anchored on #f15a24 -->
+    <linearGradient id="orange" gradientUnits="userSpaceOnUse" x1="0" y1="${y0.toFixed(0)}" x2="0" y2="${y1.toFixed(0)}">
+      <stop offset="0" stop-color="#FF854A"/><stop offset="0.5" stop-color="#F15A24"/><stop offset="1" stop-color="#D8431A"/>
+    </linearGradient>
+    <!-- controlled brick-red fs accent -->
+    <linearGradient id="red" gradientUnits="userSpaceOnUse" x1="0" y1="${fy0.toFixed(0)}" x2="0" y2="${fy1.toFixed(0)}">
+      <stop offset="0" stop-color="#EF4A1C"/><stop offset="1" stop-color="#C42711"/>
+    </linearGradient>
+  </defs>`
+
+const BODY = `  <g fill="url(#orange)">
+${markPaths.map(p => `    ${p}`).join('\n')}
+  </g>
+  <g fill="url(#red)">
+${fsPaths.map(p => `    ${p}`).join('\n')}
+  </g>`
 
 const outputs: Array<[string, Mode]> = [
   ['decmpfs-combomark.svg', 'adaptive'],

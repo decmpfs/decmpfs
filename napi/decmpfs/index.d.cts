@@ -199,7 +199,8 @@ export interface PackExeResult {
 export function writeDecmpfsFileSync(
   path: string,
   data: Uint8Array,
-  options?: WriteDecmpfsOptions,
+  // oxlint-disable-next-line typescript/no-duplicate-type-constituents -- explicit `| undefined` on optionals is the fleet convention (socket/optional-explicit-undefined), not redundancy.
+  options?: WriteDecmpfsOptions | undefined,
 ): DecmpfsResult
 /**
  * Async {@link writeDecmpfsFileSync}.
@@ -207,7 +208,8 @@ export function writeDecmpfsFileSync(
 export function writeDecmpfsFile(
   path: string,
   data: Uint8Array,
-  options?: WriteDecmpfsOptions,
+  // oxlint-disable-next-line typescript/no-duplicate-type-constituents -- explicit `| undefined` on optionals is the fleet convention (socket/optional-explicit-undefined), not redundancy.
+  options?: WriteDecmpfsOptions | undefined,
 ): Promise<DecmpfsResult>
 
 /**
@@ -216,7 +218,8 @@ export function writeDecmpfsFile(
 export function copyDecmpfsFileSync(
   src: string,
   dest: string,
-  options?: CopyDecmpfsOptions,
+  // oxlint-disable-next-line typescript/no-duplicate-type-constituents -- explicit `| undefined` on optionals is the fleet convention (socket/optional-explicit-undefined), not redundancy.
+  options?: CopyDecmpfsOptions | undefined,
 ): DecmpfsResult
 /**
  * Async {@link copyDecmpfsFileSync}.
@@ -224,7 +227,8 @@ export function copyDecmpfsFileSync(
 export function copyDecmpfsFile(
   src: string,
   dest: string,
-  options?: CopyDecmpfsOptions,
+  // oxlint-disable-next-line typescript/no-duplicate-type-constituents -- explicit `| undefined` on optionals is the fleet convention (socket/optional-explicit-undefined), not redundancy.
+  options?: CopyDecmpfsOptions | undefined,
 ): Promise<DecmpfsResult>
 
 /**
@@ -234,7 +238,8 @@ export function copyDecmpfsFile(
 export function copyFileSync(
   src: string,
   dest: string,
-  mode?: number,
+  // oxlint-disable-next-line typescript/no-duplicate-type-constituents -- explicit `| undefined` on optionals is the fleet convention (socket/optional-explicit-undefined), not redundancy.
+  mode?: number | undefined,
 ): DecmpfsResult
 /**
  * Async {@link copyFileSync}.
@@ -242,7 +247,8 @@ export function copyFileSync(
 export function copyFile(
   src: string,
   dest: string,
-  mode?: number,
+  // oxlint-disable-next-line typescript/no-duplicate-type-constituents -- explicit `| undefined` on optionals is the fleet convention (socket/optional-explicit-undefined), not redundancy.
+  mode?: number | undefined,
 ): Promise<DecmpfsResult>
 
 /**
@@ -250,11 +256,13 @@ export function copyFile(
  * refuses to remove the cwd, an ancestor of it, or the filesystem root unless
  * `force`. Errors match Node's fs shape (`code`/`errno`/`syscall`/`path`).
  */
-export function rmSync(path: string, options?: RmOptions): void
+// oxlint-disable-next-line typescript/no-duplicate-type-constituents -- explicit `| undefined` on optionals is the fleet convention (socket/optional-explicit-undefined), not redundancy.
+export function rmSync(path: string, options?: RmOptions | undefined): void
 /**
  * Async {@link rmSync} (`fsPromises.rm`).
  */
-export function rm(path: string, options?: RmOptions): Promise<void>
+// oxlint-disable-next-line typescript/no-duplicate-type-constituents -- explicit `| undefined` on optionals is the fleet convention (socket/optional-explicit-undefined), not redundancy.
+export function rm(path: string, options?: RmOptions | undefined): Promise<void>
 
 /**
  * Turn an existing file into an OS-FS-compressed file IN PLACE (atomic

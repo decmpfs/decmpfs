@@ -28,7 +28,7 @@ function gitLines(gitArgs: string[]): string[] {
   if (result.status !== 0) {
     return []
   }
-  return String(result.stdout ?? '')
+  return (result.stdout ?? '')
     .split('\n')
     .map(l => l.trim())
     .filter(Boolean)

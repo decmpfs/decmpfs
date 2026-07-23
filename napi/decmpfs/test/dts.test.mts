@@ -11,8 +11,8 @@ import { test } from 'node:test'
 
 const require = createRequire(import.meta.url)
 
-test('every declared public export is present on the built addon', () => {
-  const addon = require('../index.cjs') as Record<string, unknown>
+void test('every declared public export is present on the built addon', () => {
+  const addon: Record<string, unknown> = require('../index.cjs')
   const functions = [
     'copyDecmpfsFile',
     'copyDecmpfsFileSync',

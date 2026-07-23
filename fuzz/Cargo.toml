@@ -38,9 +38,9 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 # INVERTED profile — the fuzzer must NOT inherit the ship profile. Assertions +
 # overflow checks back ON so silent wraps / assertion violations become findings.
 [profile.release]
-debug = 1                # symbolized backtraces in crash reports
-debug-assertions = true  # assertion violations become findings
-overflow-checks = true   # silent wrapping arithmetic becomes a crash finding
+debug = 1 # symbolized backtraces in crash reports
+debug-assertions = true # assertion violations become findings
+overflow-checks = true # silent wrapping arithmetic becomes a crash finding
 
 [[bin]]
 name = "decode_pressed_data"

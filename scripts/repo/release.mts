@@ -39,7 +39,6 @@ const arg = (argv[0] ?? '').replace(/^v/, '')
 const push = process.argv.includes('--push')
 const dryRun = process.argv.includes('--dry-run')
 
-
 function die(msg: string): never {
   process.stderr.write(`release: ${msg}\n`)
   process.exit(1)
@@ -58,7 +57,7 @@ function git(args: string[], options: GitOptions = {}): string {
   if (result.status !== 0) {
     die(`git ${args[0]} exited ${result.status ?? 'on a signal'}.`)
   }
-  return String(result.stdout ?? '')
+  return result.stdout ?? ''
 }
 
 function currentVersion(): string {
@@ -107,9 +106,10 @@ function edit(rel: string, fn: (src: string) => string): void {
 
 // Preview the plan and exit before touching anything.
 if (dryRun) {
-  const changelogHas = readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8').includes(
-    `## ${version}`,
-  )
+  const changelogHas = readFileSync(
+    path.join(root, 'CHANGELOG.md'),
+    'utf8',
+  ).includes(`## ${version}`)
   logger.log(
     `release (dry-run):\n` +
       `  committed version: ${current}\n` +
@@ -127,10 +127,10 @@ if (bump) {
     src.replace(/^version\s*=\s*"[^"]+"/m, `version = "${version}"`),
   )
   edit('napi/decmpfs/package.json', src => {
-    const pkg = JSON.parse(src) as {
+    const pkg: {
       version: string
       optionalDependencies?: Record<string, string> | undefined
-    }
+    } = JSON.parse(src)
     pkg.version = version
     const optNames = Object.keys(pkg.optionalDependencies ?? {})
     for (let i = 0, { length } = optNames; i < length; i += 1) {
@@ -161,7 +161,9 @@ if (bump) {
     { cwd: root, stdio: 'inherit' },
   )
   if (relocked.status !== 0) {
-    die(`pnpm install --lockfile-only exited ${relocked.status ?? 'on a signal'}.`)
+    die(
+      `pnpm install --lockfile-only exited ${relocked.status ?? 'on a signal'}.`,
+    )
   }
   // Finalizing a prerelease keeps the section already written for this version;
   // only a fresh bump inserts a TODO stub to fill in. (The gate below still
@@ -189,12 +191,12 @@ const gateResult = spawnSync(
 if (gateResult.status !== 0) {
   die(`version parity gate exited ${gateResult.status ?? 'on a signal'}.`)
 }
-const notes = String(
+const notes = (
   spawnSync(
     process.execPath,
     [path.join(root, 'scripts', 'repo', 'changelog-section.mts'), version],
     { cwd: root, encoding: 'utf8' },
-  ).stdout ?? '',
+  ).stdout ?? ''
 ).trim()
 if (!notes || /TODO: describe the user-visible changes/.test(notes)) {
   die(
@@ -214,16 +216,9 @@ if (bump) {
   if (git(['status', '--porcelain', 'pnpm-lock.yaml']).trim()) {
     files.push('pnpm-lock.yaml')
   }
-  git(
-    [
-      'commit',
-      '-o',
-      ...files,
-      '-m',
-      `chore: bump version to ${version}`,
-    ],
-    { stdio: 'inherit' },
-  )
+  git(['commit', '-o', ...files, '-m', `chore: bump version to ${version}`], {
+    stdio: 'inherit',
+  })
 }
 
 // The script owns the tag: place it at the release commit (HEAD), moving a
@@ -235,10 +230,14 @@ const tag = `v${version}`
 // — refuse to move it. A tag with no Release (e.g. a failed release run) is safe
 // to re-fire.
 if (push) {
-  const released = spawnSync('gh', ['release', 'view', tag, '--json', 'tagName'], {
-    cwd: root,
-    encoding: 'utf8',
-  })
+  const released = spawnSync(
+    'gh',
+    ['release', 'view', tag, '--json', 'tagName'],
+    {
+      cwd: root,
+      encoding: 'utf8',
+    },
+  )
   if (released.status === 0) {
     die(
       `GitHub Release ${tag} already exists and is immutable — bump the version ` +

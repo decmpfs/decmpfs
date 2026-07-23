@@ -75,9 +75,9 @@ async function fsGroup(): Promise<string> {
 // Square icon: brand plate + the traced `fs`, centered. `fs` sits at
 // x799..996, y35..221 in the 996x256 wordmark space (measured once); scale 0.91
 // fits it into a 256 tile with padding.
-function iconSvg(group: string, options: { plate: boolean }): string {
-  const opts = { __proto__: null, ...options }
-  const bg = opts.plate
+function iconSvg(group: string, config: { plate: boolean }): string {
+  const cfg = { __proto__: null, ...config }
+  const bg = cfg.plate
     ? `<rect width="256" height="256" rx="48" fill="${PLATE}"/>`
     : ''
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="deCMPfs">${bg}<g transform="translate(-688.5 11.1) scale(0.91)">${group}</g></svg>\n`

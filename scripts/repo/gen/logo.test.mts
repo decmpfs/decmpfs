@@ -86,7 +86,7 @@ for (const variant of [
   'decmpfs-for-rust-dark.svg',
   'decmpfs-for-npm-dark.svg',
 ]) {
-  test(`${variant}: "for" is present but small`, async () => {
+  void test(`${variant}: "for" is present but small`, async () => {
     const ratio = await forHeightRatio(variant)
     assert.ok(
       ratio > 0.08,

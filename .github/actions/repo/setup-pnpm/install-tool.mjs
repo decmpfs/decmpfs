@@ -27,13 +27,7 @@
 // oxlint-disable-next-line socket/prefer-async-spawn -- composite-action helper runs on the raw runner before setup-node; node_modules is unavailable and the download / extract pipeline is naturally sync.
 import { spawnSync } from 'node:child_process'
 import crypto from 'node:crypto'
-import {
-  chmodSync,
-  mkdirSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs'
+import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { safeDeleteSync } from '@socketsecurity/lib-stable/fs/safe'
 
@@ -63,6 +57,7 @@ if (!url || !integrityArg || !destDir) {
 // sha256 for backward compat — deprecated, will be removed once all
 // call sites pass SRI directly.
 // oxlint-disable-next-line socket/export-top-level-functions -- composite-action helper runs on the raw runner before setup-node; no node_modules, no module boundary worth exporting across.
+// oxlint-disable-next-line typescript/consistent-return -- every non-returning arm ends in process.exit(1); the analyzer cannot see the never.
 function parseIntegrity(s) {
   // Parse an SRI string: (1) the algorithm (sha256/384/512), (2) the base64
   // digest after the dash.

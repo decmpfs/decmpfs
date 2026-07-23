@@ -33,6 +33,8 @@ const platformPackage = `@decmpfs/${triple}`
 // Hoisted so it sits in visibility-group order beside the other module
 // helpers; it constructs the DecmpfsWriteStream class defined below (only
 // invoked at runtime, long after the class is evaluated).
+// socket-lint: allow bag-param-optionality-naming -- public API name; the bag's
+// optionality is declared in index.d.cts (`options?:`), which plain CJS can't express.
 function createDecmpfsWriteStream(path, options) {
   return new DecmpfsWriteStream(path, options)
 }
@@ -53,6 +55,8 @@ function load() {
 const binding = load()
 
 class DecmpfsWriteStream extends Writable {
+  // socket-lint: allow bag-param-optionality-naming -- mirrors the public
+  // `options?:` bag in index.d.cts; plain CJS can't express the optionality.
   constructor(path, options) {
     super()
     const { size, ...writeOptions } = options || {}

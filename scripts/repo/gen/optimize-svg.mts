@@ -60,6 +60,7 @@ const CONFIG: Config = {
     // `makeArcs: false` disables curve→arc rewriting (svgo honors the falsy
     // value at runtime, but its `.d.ts` types the param as a MakeArcs object
     // only — assert the shape svgo actually accepts).
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- svgo's .d.ts omits the `makeArcs: false` runtime shape; the assertion is the documented workaround above.
     {
       name: 'convertPathData',
       params: {

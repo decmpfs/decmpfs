@@ -44,12 +44,12 @@ function writeTinyExecutable(name) {
   return src
 }
 
-test('exports the pack functions', () => {
+void test('exports the pack functions', () => {
   assert.equal(typeof decmpfs.packExecutable, 'function')
   assert.equal(typeof decmpfs.packExecutableSync, 'function')
 })
 
-test('sync: packs a tiny executable, dest lands executable', () => {
+void test('sync: packs a tiny executable, dest lands executable', () => {
   const src = writeTinyExecutable('sync-src.sh')
   const dest = path.join(dir, 'sync-dest.bin')
   const beforeSize = statSync(src).size
@@ -72,7 +72,7 @@ test('sync: packs a tiny executable, dest lands executable', () => {
   }
 })
 
-test('async: packExecutable — packs and round-trips the same result shape', async () => {
+void test('async: packExecutable — packs and round-trips the same result shape', async () => {
   const src = writeTinyExecutable('async-src.sh')
   const dest = path.join(dir, 'async-dest.bin')
   const beforeSize = statSync(src).size
@@ -86,7 +86,7 @@ test('async: packExecutable — packs and round-trips the same result shape', as
   assert.ok(r.after > 0)
 })
 
-test('gateGlob miss — skippedGate true, nothing written', () => {
+void test('gateGlob miss — skippedGate true, nothing written', () => {
   const src = writeTinyExecutable('gate-src.sh')
   const dest = path.join(dir, 'gate-dest.bin')
 
@@ -102,7 +102,7 @@ test('gateGlob miss — skippedGate true, nothing written', () => {
   assert.equal(existsSync(dest), false, 'a gate miss must write nothing')
 })
 
-test('gateSize floor miss on a tiny source — skippedGate true', () => {
+void test('gateSize floor miss on a tiny source — skippedGate true', () => {
   const src = writeTinyExecutable('gate-size-src.sh')
   const dest = path.join(dir, 'gate-size-dest.bin')
 
@@ -112,7 +112,7 @@ test('gateSize floor miss on a tiny source — skippedGate true', () => {
   assert.equal(existsSync(dest), false)
 })
 
-test('invalid gate size predicate — throws', () => {
+void test('invalid gate size predicate — throws', () => {
   const src = writeTinyExecutable('bad-gate-src.sh')
   const dest = path.join(dir, 'bad-gate-dest.bin')
 

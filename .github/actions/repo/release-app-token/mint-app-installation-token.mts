@@ -51,7 +51,8 @@ function gh(
   method: string,
   path: string,
   jwt: string,
-  body?: string        ,
+  // oxlint-disable-next-line typescript/no-duplicate-type-constituents -- explicit `| undefined` on optionals is the fleet convention (socket/optional-explicit-undefined), not redundancy.
+  body?: string | undefined,
 ): Promise<GhResponse> {
   const headers: Record<string, string> = {
     accept: 'application/vnd.github+json',

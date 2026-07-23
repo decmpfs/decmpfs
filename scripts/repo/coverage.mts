@@ -75,8 +75,8 @@ if (!existsSync(rustc) || !existsSync(cargo)) {
 }
 
 // The feature gate rejects a stable channel — confirm we really have nightly.
-const version = String(
-  spawnSync(rustc, ['--version'], { encoding: 'utf8' }).stdout ?? '',
+const version = (
+  spawnSync(rustc, ['--version'], { encoding: 'utf8' }).stdout ?? ''
 ).trim()
 if (!version.includes('nightly')) {
   fail(

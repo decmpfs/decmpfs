@@ -13,7 +13,10 @@ export interface Resolution {
 //     section already written for it (kept verbatim, never re-stubbed);
 //   - a new semver arg → BUMP (insert a CHANGELOG stub to fill in);
 //   - otherwise release WHAT IS COMMITTED.
-export function resolveRelease(current: string, argVersion: string): Resolution {
+export function resolveRelease(
+  current: string,
+  argVersion: string,
+): Resolution {
   const pre = current.match(/^(?<base>\d+\.\d+\.\d+)-[0-9A-Za-z.-]+$/)
   if (pre && !argVersion) {
     return { version: pre.groups!['base']!, mode: 'finalize' }

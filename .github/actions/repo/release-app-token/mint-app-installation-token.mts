@@ -51,7 +51,7 @@ function gh(
   method: string,
   path: string,
   jwt: string,
-  body?: string,
+  body?: string        ,
 ): Promise<GhResponse> {
   const headers: Record<string, string> = {
     accept: 'application/vnd.github+json',

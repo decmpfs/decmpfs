@@ -61,7 +61,7 @@ export async function surface(): Promise<void> {
     gateGlob: '**/*',
     gateSize: '>= 1MB',
   })
-  void (p.packed && p.skippedGate === false && p.before + p.after >= 0)
+  void (p.packed && ! p.skippedGate && p.before + p.after >= 0)
   void (await packExecutable('/src', '/dest', { stub: '/stub' }))
 
   // packExecutable requires `stub` — omitting it is a type error.

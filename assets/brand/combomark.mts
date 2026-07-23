@@ -33,8 +33,8 @@ const BY = { x: 880, y: 1112 }
 const SL = { x: 800, y: 1188 }
 
 // --- tagline palette (mark orange/red reads on both; only text flips) -------
-const LIGHT = { by: '#736E67', socket: '#4A453E', labs: '#1A1626' }
-const DARK = { by: '#9A948C', socket: '#C9C3BB', labs: '#F5F2EC' }
+const LIGHT = { by: '#736E67', labs: '#1A1626', socket: '#4A453E' }
+const DARK = { by: '#9A948C', labs: '#F5F2EC', socket: '#C9C3BB' }
 
 const mark = readFileSync(path.join(HERE, 'decmpfs-mark.svg'), 'utf8')
 const paths = mark.match(/<path d="[^"]+"\/?>/g) ?? []
@@ -47,7 +47,7 @@ const markPaths = paths.slice(0, 6)
 const fsPaths = paths.slice(6)
 
 /** Y coordinates of a path list (numbers are `x y x y …`, so every 2nd one). */
-function yValues(ps: string[]): number[] {
+export function yValues(ps: string[]): number[] {
   return ps.flatMap(p =>
     (p.match(/-?\d*\.?\d+/g) ?? []).map(Number).filter((_, i) => i % 2 === 1),
   )
@@ -75,9 +75,9 @@ ${markPaths.map(p => `    ${p}`).join('\n')}
 ${fsPaths.map(p => `    ${p}`).join('\n')}
   </g>`
 
-type Mode = 'adaptive' | 'light' | 'dark'
+export type Mode = 'adaptive' | 'light' | 'dark'
 
-function tagline(mode: Mode): string {
+export function tagline(mode: Mode): string {
   let style = ''
   let by: string
   let socket: string
@@ -104,7 +104,7 @@ function tagline(mode: Mode): string {
   )
 }
 
-function build(mode: Mode): string {
+export function build(mode: Mode): string {
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${VIEWBOX} ${VIEWBOX}" role="img" aria-label="decmpfs by socket labs">\n` +
     `${DEFS}\n${BODY}\n${tagline(mode)}\n</svg>\n`

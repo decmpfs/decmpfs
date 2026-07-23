@@ -9,6 +9,7 @@ import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { safeDeleteSync } from '@socketsecurity/lib-stable/fs/safe'
 
 // The addon's `module.exports = load()` is built dynamically, so it can't be
 // statically named-imported under ESM — require it (matches the sibling tests).
@@ -30,7 +31,7 @@ test('decmpfsStat reports { compressed, logical, physical } for a plain file', (
       'a freshly-written plain file is not compressed',
     )
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    safeDeleteSync(dir)
   }
 })
 
@@ -55,7 +56,7 @@ test('decmpfsStat reflects a compressed write where the FS supports it', async (
       )
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    safeDeleteSync(dir)
   }
 })
 

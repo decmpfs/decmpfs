@@ -13,6 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { finished } from 'node:stream/promises'
 import { after, before, test } from 'node:test'
+import { safeDelete } from '@socketsecurity/lib-stable/fs/safe'
 
 const require = createRequire(import.meta.url)
 const decmpfs = require('../index.cjs')
@@ -23,7 +24,7 @@ before(async () => {
 })
 after(async () => {
   if (dir) {
-    await rm(dir, { force: true, recursive: true })
+    await safeDelete(dir)
   }
 })
 

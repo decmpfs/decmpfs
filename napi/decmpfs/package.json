@@ -28,7 +28,6 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
-    "@socketsecurity/lib-stable": "catalog:",
     "@types/node": "catalog:",
     "typescript": "catalog:"
   },

@@ -12,7 +12,6 @@ import { createRequire } from 'node:module'
 import * as os from 'node:os'
 import path from 'node:path'
 import { after, before, test } from 'node:test'
-import { safeDelete } from '@socketsecurity/lib-stable/fs/safe'
 
 const require = createRequire(import.meta.url)
 const decmpfs = require('../index.cjs')
@@ -23,7 +22,8 @@ before(async () => {
 })
 after(async () => {
   if (dir) {
-    await safeDelete(dir)
+    // oxlint-disable-next-line socket/prefer-safe-delete -- dep-0 addon test (CI Test job runs with no install); the path is this test's own mkdtemp dir.
+    await rm(dir, { recursive: true, force: true })
   }
 })
 

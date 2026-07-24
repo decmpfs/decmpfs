@@ -4,6 +4,7 @@
 //   node scripts/repo/test.mts            # test if modified .rs (working tree vs HEAD)
 //   node scripts/repo/test.mts --staged   # pre-commit: test if staged .rs; else no-op
 //   node scripts/repo/test.mts --all      # whole workspace (cargo test)
+//   node scripts/repo/test.mts <t.test.mts…>  # run the named JS tests (node --test)
 //
 // The crate is the product, so `cargo test --workspace --locked` is the suite
 // (matching CI's "Test crate" step). The staged/modified scopes skip when no
@@ -23,6 +24,19 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const args = process.argv.slice(2)
 const staged = args.includes('--staged')
 const all = args.includes('--all')
+
+// Explicit JS test files name exactly what to run — never Rust-gated. CI's
+// bare `node --test` discovers the same files; this keeps the local wrapper
+// honest instead of silently skipping a named test.
+const jsTests = args.filter(arg => /\.test\.[cm]?[jt]s$/.test(arg))
+if (jsTests.length > 0) {
+  const jsResult = spawnSync(
+    process.execPath,
+    ['--test', ...jsTests],
+    { cwd: root, stdio: 'inherit' },
+  )
+  process.exit(jsResult.status ?? 1)
+}
 
 // A config change that affects every test escalates to the whole suite.
 const ESCALATORS = new Set([

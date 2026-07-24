@@ -29,7 +29,7 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { getDefaultLogger } from '@socketsecurity/lib-stable/logger/default'
 import { spawnSync } from '@socketsecurity/lib-stable/process/spawn/child'
-import { resolveRelease } from './release-lib.mts'
+import { changelogSection, resolveRelease } from './release-lib.mts'
 
 const logger = getDefaultLogger()
 
@@ -165,17 +165,32 @@ if (bump) {
       `pnpm install --lockfile-only exited ${relocked.status ?? 'on a signal'}.`,
     )
   }
-  // Finalizing a prerelease keeps the section already written for this version;
-  // only a fresh bump inserts a TODO stub to fill in. (The gate below still
-  // requires a real, non-stub section before the release proceeds.)
+  // Finalizing a prerelease keeps the section already written for this
+  // version; only a fresh bump derives one. The section comes from the
+  // conventional-commit subjects since the previous tag: feat/fix/perf
+  // become bullets, plumbing (ci, deps, fleet churn, test scaffolding) is
+  // dropped, and a release with nothing user-facing says so plainly. Edit
+  // the generated section before pushing if a bullet needs better prose —
+  // an existing section is always kept verbatim.
   const changelog = readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8')
   if (!changelog.includes(`## ${version}`)) {
-    edit('CHANGELOG.md', src =>
-      src.replace(
-        /\n## /,
-        `\n## ${version}\n\n- TODO: describe the user-visible changes in this release.\n\n## `,
-      ),
+    const prevTag = (
+      spawnSync('git', ['describe', '--tags', '--abbrev=0'], {
+        cwd: root,
+        encoding: 'utf8',
+      }).stdout ?? ''
+    ).trim()
+    const range = prevTag ? `${prevTag}..HEAD` : 'HEAD'
+    const subjects = (
+      spawnSync('git', ['log', '--format=%s', range], {
+        cwd: root,
+        encoding: 'utf8',
+      }).stdout ?? ''
     )
+      .split('\n')
+      .filter(Boolean)
+    const section = changelogSection(version, subjects)
+    edit('CHANGELOG.md', src => src.replace(/\n## /, `\n${section}\n## `))
   }
 }
 

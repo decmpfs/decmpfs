@@ -29,14 +29,6 @@ const all = args.includes('--all')
 // bare `node --test` discovers the same files; this keeps the local wrapper
 // honest instead of silently skipping a named test.
 const jsTests = args.filter(arg => /\.test\.[cm]?[jt]s$/.test(arg))
-if (jsTests.length > 0) {
-  const jsResult = spawnSync(
-    process.execPath,
-    ['--test', ...jsTests],
-    { cwd: root, stdio: 'inherit' },
-  )
-  process.exit(jsResult.status ?? 1)
-}
 
 // A config change that affects every test escalates to the whole suite.
 const ESCALATORS = new Set([
@@ -61,23 +53,32 @@ function out(message: string): void {
   process.stdout.write(`${message}\n`)
 }
 
-if (!all) {
-  const scoped = gitLines(
-    staged
-      ? ['diff', '--cached', '--name-only', '--diff-filter=ACM']
-      : ['diff', '--name-only', '--diff-filter=ACM', 'HEAD'],
-  )
-  const testable = scoped.some(
-    file => file.endsWith('.rs') || ESCALATORS.has(path.basename(file)),
-  )
-  if (!testable) {
-    out(`No ${staged ? 'staged' : 'modified'} Rust changes; skipping tests.`)
-    process.exit(0)
+if (jsTests.length > 0) {
+  const jsResult = spawnSync(process.execPath, ['--test', ...jsTests], {
+    cwd: root,
+    stdio: 'inherit',
+  })
+  process.exitCode = jsResult.status ?? 1
+} else {
+  let rustInScope = true
+  if (!all) {
+    const scoped = gitLines(
+      staged
+        ? ['diff', '--cached', '--name-only', '--diff-filter=ACM']
+        : ['diff', '--name-only', '--diff-filter=ACM', 'HEAD'],
+    )
+    rustInScope = scoped.some(
+      file => file.endsWith('.rs') || ESCALATORS.has(path.basename(file)),
+    )
+    if (!rustInScope) {
+      out(`No ${staged ? 'staged' : 'modified'} Rust changes; skipping tests.`)
+    }
+  }
+  if (rustInScope) {
+    const result = spawnSync('cargo', ['test', '--workspace', '--locked'], {
+      cwd: root,
+      stdio: 'inherit',
+    })
+    process.exitCode = result.status ?? 1
   }
 }
-
-const result = spawnSync('cargo', ['test', '--workspace', '--locked'], {
-  cwd: root,
-  stdio: 'inherit',
-})
-process.exit(result.status ?? 1)

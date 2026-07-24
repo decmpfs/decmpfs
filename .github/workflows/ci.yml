@@ -79,9 +79,16 @@ jobs:
       - name: Test crate
         shell: bash
         run: '"$SFW_BIN" cargo test --workspace --locked'
-      # The addon build + unit tests need no node dependencies — run them
-      # directly (node strips the .mts scripts/tests). The .d.cts type-check is
-      # platform-independent and lives in its own `typecheck` job below.
+      # The addon tests use workspace devDependencies (@socketsecurity/lib-stable
+      # for guarded tmp-dir cleanup), so install them the same way the typecheck
+      # job does: platform manifests first (the lockfile links napi/decmpfs/npm/*),
+      # then a frozen install. The .d.cts type-check is platform-independent and
+      # lives in its own `typecheck` job below.
+      - uses: ./.github/actions/repo/setup-pnpm
+      - name: Generate platform workspace manifests
+        run: node napi/decmpfs/scripts/make-npm-dirs.mts
+      - name: Install workspace devDependencies
+        run: pnpm install --frozen-lockfile
       - name: Build addon
         working-directory: napi/decmpfs
         run: node scripts/build.mts

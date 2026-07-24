@@ -10,6 +10,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 
+import { safeDeleteSync } from '@socketsecurity/lib-stable/fs/safe'
+
 // The addon's `module.exports = load()` is built dynamically, so it can't be
 // statically named-imported under ESM — require it (matches the sibling tests).
 const require = createRequire(import.meta.url)
@@ -30,8 +32,7 @@ void test('decmpfsStat reports { compressed, logical, physical } for a plain fil
       'a freshly-written plain file is not compressed',
     )
   } finally {
-    // oxlint-disable-next-line socket/prefer-safe-delete -- dep-0 addon test (CI Test job runs with no install); the path is this test's own mkdtemp dir.
-    rmSync(dir, { recursive: true, force: true })
+    safeDeleteSync(dir)
   }
 })
 
@@ -56,8 +57,7 @@ void test('decmpfsStat reflects a compressed write where the FS supports it', as
       )
     }
   } finally {
-    // oxlint-disable-next-line socket/prefer-safe-delete -- dep-0 addon test (CI Test job runs with no install); the path is this test's own mkdtemp dir.
-    rmSync(dir, { recursive: true, force: true })
+    safeDeleteSync(dir)
   }
 })
 

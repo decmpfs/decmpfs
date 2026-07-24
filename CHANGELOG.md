@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2
+
+- Maintenance release — no API or behavior changes; platform packages rebuilt.
+
 ## 0.1.1
 
 - `rm` / `rmSync`: `fs.rm`-parity removal (`recursive` / `force` / `maxRetries`

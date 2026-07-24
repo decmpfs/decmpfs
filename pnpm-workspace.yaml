@@ -60,7 +60,7 @@ catalog:
   'semver': 7.8.5
   'shell-quote': 1.10.0
   svgo: 4.0.1
-  'taze': 19.14.1
+  'taze': 19.16.0
   typescript: 7.0.2
   'vitest': 4.1.10
 
@@ -98,6 +98,15 @@ overrides:
   'wrap-ansi@>=8': '9.0.2'
   'yaml@2': '2.9.0'
 
+patchedDependencies:
+  # single-registry: routes taze version resolution through its own bundled
+  # direct-registry client for EVERY registry, instead of the fast-npm-meta
+  # hosted endpoint it uses when the registry is the npm default. Patch file
+  # ships in the fleet bundle; the pin above must track its version.
+  # TEMPORARY: remove if taze grows a supported flag to force direct-registry
+  # resolution (or we swap to our own metadata client, see socket-lib plan).
+  taze@19.16.0: patches/taze@19.16.0.patch
+
 minimumReleaseAgeExclude:
   - '@sdxgen/*'
   - '@socketoverride/*'
@@ -113,6 +122,15 @@ minimumReleaseAgeExclude:
   - 'magic-string@1.0.0'
   # published: 2026-07-16 | removable: 2026-07-23
   - 'portless@0.15.4'
+  # taze 19.16.0 — the dep updater itself; forced ahead of the soak by owner
+  # directive so the regenerated single-registry patch (patchedDependencies)
+  # tracks the current release. Exact-pinned so a future version re-soaks.
+  # published: 2026-07-22 | removable: 2026-07-29
+  - 'taze@19.16.0'
+  # verkit — new dev-only transitive of taze 19.16.0 (same owner directive);
+  # exact-pinned so future versions re-soak.
+  # published: 2026-07-19 | removable: 2026-07-26
+  - 'verkit@0.1.2'
   # oxlint-tsgolint 7.0.2001 — the type-aware lint sidecar the fleet lint
   # runner's whole-tree gate needs. The main package + its per-platform binary
   # family are pinned to the exact version (a scope glob would blanket-bypass a

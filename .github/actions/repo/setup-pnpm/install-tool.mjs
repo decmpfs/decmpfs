@@ -27,9 +27,14 @@
 // oxlint-disable-next-line socket/prefer-async-spawn -- composite-action helper runs on the raw runner before setup-node; node_modules is unavailable and the download / extract pipeline is naturally sync.
 import { spawnSync } from 'node:child_process'
 import crypto from 'node:crypto'
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import path from 'node:path'
-import { safeDeleteSync } from '@socketsecurity/lib-stable/fs/safe'
 
 // Composite-action helper runs on the raw runner BEFORE setup-node finishes
 // resolving node_modules — `@socketsecurity/lib-stable` is not on disk yet
@@ -158,7 +163,8 @@ async function main() {
       console.error(`× extraction failed: ${extractCmd} exited ${r.status}`)
       process.exit(1)
     }
-    safeDeleteSync(archivePath)
+    // oxlint-disable-next-line socket/prefer-safe-delete -- pre-setup-node action; @socketsecurity/lib-stable not installed yet, and the path is this script's own tmp archive.
+    rmSync(archivePath, { force: true })
   } else if (binName) {
     // Bare-binary asset (no archive). Rename to bin-name and chmod.
     const finalPath = path.join(destDir, binName)
